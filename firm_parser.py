@@ -22,6 +22,7 @@ class FirmParser:
 
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
         chrome_options.add_argument("--lang=en")
+        chrome_options.add_argument("--headless=new")
 
 
         user_agents = [
@@ -82,8 +83,12 @@ class FirmParser:
                         break
                     last_height = new_height
                     # Wait until listings load
-
-                wait.until(EC.presence_of_all_elements_located((By.CLASS_NAME, "VkpGBb")))
+                
+                try:
+                    wait.until(EC.presence_of_all_elements_located((By.CLASS_NAME, "VkpGBb")))
+                except:
+                    log(f"No listings found on {page} page.", self.log_path)
+                    break
 
                 listings = driver.find_elements(By.CLASS_NAME, "VkpGBb")
                 log(f"Found {len(listings)} listings.", self.log_path)

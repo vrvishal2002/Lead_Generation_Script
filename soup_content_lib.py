@@ -23,6 +23,7 @@ def get_rendered_soup(url):
 
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
     chrome_options.add_argument("--lang=en")
+    chrome_options.add_argument("--headless=new")
 
     user_agents = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",

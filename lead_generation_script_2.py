@@ -24,7 +24,8 @@ if __name__ == "__main__":
     state = "Connecticut"
     query = "medical malpractice lawyers"
     cities = [
-    "Andover","Ansonia","Ashford","Avon","Barkhamsted","Beacon Falls","Berlin","Bethany","Bethel","Bethlehem",
+    # "Andover","Ansonia","Ashford","Avon","Barkhamsted","Beacon Falls","Berlin","Bethany",
+    "Bethel","Bethlehem",
     "Bloomfield","Bolton","Bozrah","Branford","Bridgeport","Bridgewater","Bristol","Brookfield","Brooklyn","Burlington",
     "Canaan","Canterbury","Canton","Chaplin","Cheshire","Chester","Clinton","Colchester","Colebrook","Columbia",
     "Cornwall","Coventry","Cromwell","Danbury","Darien","Deep River","Derby","Durham","East Granby","East Haddam",
@@ -48,7 +49,7 @@ if __name__ == "__main__":
         # query = input("Enter query (example: medical malpractice lawyers): ")
         # city = input("Enter city: ")
         # state = input("Enter state: ")
-        query = f"{query} in {city}"
+        query = f"{query} in {city}(USA)"
         target = 200
         # target = int(input("How many firms?: "))
 
