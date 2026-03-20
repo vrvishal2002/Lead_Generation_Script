@@ -1,7 +1,6 @@
 import os, csv, pandas as pd
 import time
 from urllib.parse import urlparse
-from firm_parser import FirmParser
 from firm_scraper import FirmScraper
 from email_verifier import EmailVerifier, EmailFakeChecker
 from log_lib import get_log_name, log
@@ -26,68 +25,94 @@ def get_domain(url):
     return domain
 
 
-def firm_worker():
+def firm_worker(existing_domain_names=None, domains_with_no_leads=None):
+    existing_domain_names = existing_domain_names or set()
+    domains_with_no_leads = domains_with_no_leads or set()
+    fake_checker = EmailFakeChecker(log_path=log_path)
+    scraper = FirmScraper(log_path=log_path)
+
     while True:
         firm = firm_queue.get()
+        website = firm.get("Website", "")
+        firm_name = firm.get("Firm Name", "Unknown Firm")
+        domain = get_domain(website)
 
         try:
-            
-            # Checking for Fake email acceptance..
-            log(f"Checking for Fake email acceptance for firm {firm['Firm Name']}...", log_path)
-            check_fake = EmailFakeChecker(log_path=log_path).verify_email(get_domain(firm["Website"]))
-            if not check_fake[0]:
-                log(f"domain {get_domain(firm['Website'])} is accepting fake emails so stop processing for current firm", log_path)
+            if not website or not domain:
+                log(f"Firm {firm_name} has no valid website. Skipping.", log_path)
                 continue
 
-            profiles = FirmScraper(log_path=log_path).scrape_firm(firm["Website"])
-            log(f"Found {len(profiles)} Profiles for {firm['Firm Name']}", log_path)
+            if domain in existing_domain_names:
+                log(f"Already got leads from domain {domain}. Skipping firm {firm_name}.", log_path)
+                continue
+
+            if domain in domains_with_no_leads:
+                log(f"Domain {domain} was previously found to have no profiles with valid emails. Skipping firm {firm_name}.", log_path)
+                continue
+
+            log(f"Checking fake email acceptance for firm {firm_name}...", log_path)
+            check_fake = fake_checker.verify_email(domain)
+            if not check_fake[0]:
+                log(f"Domain {domain} is accepting fake emails, skipping firm {firm_name}.", log_path)
+                continue
+
+            profiles = scraper.scrape_firm(website)
+            log(f"Found {len(profiles)} profiles for {firm_name}", log_path)
 
             for profile in profiles:
-                profile["Firm Name"] = firm["Firm Name"]
+                profile["Firm Name"] = firm_name
                 profile_queue.put(profile)
 
         except Exception as e:
-            log(f"Firm error {firm['Firm Name']} {e}", log_path)
+            log(f"Firm error {firm_name} {e}", log_path)
 
         finally:
             firm_queue.task_done()
 
 
-def email_worker(city="", state="", profile_names=set()):
+def email_worker(city="", state="", profile_names=None, domain_with_no_profiles_cache=None, domain_with_no_profiles_cache_lock=None):
+    profile_names = profile_names or set()
+    verifier = EmailVerifier(log_path=log_path)
+
     while True:
         profile = profile_queue.get()
-        if "Name" in profile and profile["Name"] in profile_names:
-            log(f"Profile {profile['Name']} already exists. Skipping email verification.", log_path)
-            profile_queue.task_done()
-            continue
+        profile_name = profile.get("Name", "Unknown")
+        profile_domain = get_domain(profile.get("Profile URL", ""))
+
         try:
-            email = ""
-            log(f"profile: {profile}, 'fsio'", log_path)
-            if "Email" in profile and profile["Email"]:
-                email = profile["Email"].strip()
-            log(f"profile: {profile}, 'fsio'", log_path)
-            if email and not name_processor_lib.is_valid_attorney_slug(email.split('@')[0]):
+            if domain_with_no_profiles_cache is not None and domain_with_no_profiles_cache_lock is not None and profile_domain:
+                with domain_with_no_profiles_cache_lock:
+                    domain_with_no_profiles_cache.setdefault(profile_domain, True)
+
+            if profile_name in profile_names:
+                log(f"Profile {profile_name} already exists. Skipping email verification.", log_path)
+                continue
+
+            email = (profile.get("Email") or "").strip()
+
+            if email and not name_processor_lib.is_valid_attorney_slug(email.split("@")[0]):
                 email = ""
-            log(f"profile: {profile}, 'fsio'", log_path)
+
             if email:
-                verified = EmailVerifier(log_path=log_path).verify(emails=[email])
-                if verified["status"] != "valid":
+                verified = verifier.verify(emails=[email])
+                if verified["status"] == "invalid":
                     email = ""
-            log(f"profile: {profile}, 'fsio'", log_path)
-            if not email:
-                email = EmailVerifier(log_path=log_path).get_valid_email(
-                    profile["Name"],
-                    get_domain(profile["Profile URL"])
-                )
-            log(f"profile: {profile}, 'fsio'", log_path)
+
+            if not email and profile_name and profile_domain:
+                email = verifier.get_valid_email(profile_name, profile_domain)
+
             if email:
                 profile["Email"] = email
                 profile["City"] = city
                 profile["State"] = state
                 result_queue.put(profile)
 
+                if domain_with_no_profiles_cache is not None and domain_with_no_profiles_cache_lock is not None and profile_domain:
+                    with domain_with_no_profiles_cache_lock:
+                        domain_with_no_profiles_cache[profile_domain] = False
+
         except Exception as e:
-            log(f"{profile.get('Name', 'Unknown')}: Email worker error {e}", log_path)
+            log(f"{profile_name}: Email worker error {e}", log_path)
 
         finally:
             profile_queue.task_done()

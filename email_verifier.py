@@ -19,7 +19,13 @@ DISPOSABLE_DOMAINS =  {
         "mailinator.com",
         "tempmail.com",
         "10minutemail.com",
-        "guerrillamail.com"
+        "guerrillamail.com",
+        "protectingpatientrights.com",
+        "cellinolaw.com",
+        "cartermario.com",
+        "brandonjbroderick.com",
+        "carmodylaw.com",
+        "danaherlagnese.com"
 }
 
 mx_cache = {}
@@ -279,55 +285,32 @@ class EmailVerifier:
         pref, mx = mx_hosts[0]
         try:
             mx = mx.rstrip(".")
-            if stuck_check:
-                log(f"Stuck check iteration {itr} for emails: {remaining} with MX: {mx}", self.log_path)
             lock = self.get_domain_lock(domain)
 
-            if stuck_check:
-                log(f"Acquiring lock for domain {domain} in iteration {itr} for emails: {remaining}", self.log_path)
 
             with lock:
 
-                if stuck_check:
-                    log(f"Lock acquired for domain {domain} in iteration {itr} for emails: {remaining}", self.log_path)
                 time.sleep(random.uniform(0.1, 0.5))
 
-                if stuck_check:
-                    log(f"Connecting to SMTP server {mx} for domain {domain} in iteration {itr} for emails: {remaining}", self.log_path)
                 with smtplib.SMTP(mx, 25, timeout=self.timeout) as server:
-                    if stuck_check:                        
-                        log(f"Connected to SMTP server {mx} for domain {domain} in iteration {itr} for emails: {remaining}", self.log_path)
                     USER_DOMAIN = random.choice(VALIDATING_USER_DOMAINS)
                     server.ehlo(USER_DOMAIN)
-                    if stuck_check:
-                        log(f"Sent EHLO to SMTP server {mx} for domain {domain} in iteration {itr} for emails: {remaining}", self.log_path)
 
                     if server.has_extn("STARTTLS"):
-                        if stuck_check:
-                            log(f"In STARTTLS to SMTP server {mx} for domain {domain} in iteration {itr} for emails: {remaining}", self.log_path)
                         server.starttls()
-                        if stuck_check:
-                            log(f"After STARTTLS to SMTP server {mx} for domain {domain} in iteration {itr} for emails: {remaining}", self.log_path)
                         server.ehlo(USER_DOMAIN)
-                        if stuck_check:
-                            log(f"Sent EHLO to SMTP server {mx} for domain {domain} in iteration {itr} for emails: {remaining}", self.log_path)
 
                     sender = f"probe@{USER_DOMAIN}"
 
-                    if stuck_check:
-                        log(f"Sending MAIL FROM to SMTP server {mx} for domain {domain} in iteration {itr} for emails: {remaining}", self.log_path)
                     server.mail(sender)
 
                     for email in remaining:
 
-                        if stuck_check:
-                            log(f"Sending RCPT TO for {email} to SMTP server {mx} for domain {domain} in iteration {itr} for emails: {remaining}", self.log_path)
                         code, message = server.rcpt(email)
-                        if stuck_check:
-                            log(f"Received response for RCPT TO for {email} from SMTP server {mx} for domain {domain} in iteration {itr} for emails: {remaining}. Code: {code}, Message: {message}", self.log_path)
                         results[email] = code
 
                         if code in [250, 251]:
+                            log(f"Email: {email} verified with code: {code} in iteration {itr}", self.log_path)
                             return [email, "verified by smtp valid status"], results, itr
 
 
@@ -380,81 +363,7 @@ class EmailVerifier:
                     itr + 1,
                     results
                 )
-            valid_email, source_link = soup_content_lib.check_email_in_search_results(emails)
-            if valid_email:
-                log(f"Email validated through web browser. Source: {source_link}", self.log_path)
-                return [[valid_email, "verified via web browser"]], results, itr
         return None, results, itr
-
-
-    # 4. SMTP mailbox check
-    def smtp_response(self, email, mx_hosts, itr=0):
-        status_code = []
-        domain = email.split("@")[1]
-        if len(mx_hosts) > 2:
-            mx_hosts = mx_hosts[:2]
-        for pref, mx in mx_hosts:
-            try:
-                with user_domain_lock:
-                    USER_DOMAIN = VALIDATING_USER_DOMAINS[random.randint(0, len(VALIDATING_USER_DOMAINS)-1)]
-                    USER_DOMAIN = [domain, USER_DOMAIN][random.randint(0, 1)]
-
-                mx = mx.rstrip(".")
-                lock = self.get_domain_lock(domain)
-                with lock:
-                    time.sleep(random.uniform(0.1, 0.5))
-                    with smtplib.SMTP(mx, 25, timeout=self.timeout) as server:
-                        server.ehlo(USER_DOMAIN)
-
-                        if server.has_extn("STARTTLS"):
-                            server.starttls()
-                            server.ehlo(USER_DOMAIN)
-
-                        USER_EMAIL = email.split("@")[0] + '@' + USER_DOMAIN
-                        log(f"user_email:  {USER_EMAIL} {USER_DOMAIN}", self.log_path)
-                        server.mail(USER_EMAIL)
-                        code, message = server.rcpt(email)
-
-                if code in [250, 251]:
-                    status_code.append(code)
-                    with mx_cache_lock:
-                        mx_cache[domain] = [(0, mx)]
-                    return status_code
-
-                # if code in [550, 551, 553]:
-                #     return "invalid"
-
-                # if code in [421, 450, 451, 452]:
-                #     return f"Temporary failure: {code}"
-                status_code.append(code)
-
-            except (socket.timeout, smtplib.SMTPException, ssl.SSLError, socket.gaierror) as e:
-                log(f"{email} Error: {e}", self.log_path)
-                # Check through browser for existence
-                if itr < MAX_ITERATIONS:
-                    continue
-                is_exist, source_link = soup_content_lib.check_email_in_search_results(email)
-                if is_exist:
-                    log(f"Email validated through web browser. Source: {source_link}", self.log_path)
-                    return [250]
-        
-        return status_code
-    
-
-    def smtp_check(self, email, mx_hosts, itr=0):
-        status_code = self.smtp_response(email, mx_hosts, itr)
-        status_code.sort()
-
-        if status_code and all(code in [250, 251] for code in status_code):
-            return f"valid", status_code
-
-        if status_code and all(code in [550,551,553] for code in status_code):
-            return f"invalid status codes: {status_code}", status_code
-        
-        if status_code and all(code in [421, 450, 451, 452] for code in status_code):
-            return f"Temporary failure: {status_code}", status_code
-
-        return f"unknown status code: {status_code}", status_code
 
 
     # full verification pipeline

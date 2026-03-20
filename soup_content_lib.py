@@ -8,6 +8,8 @@ import undetected_chromedriver as uc
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
+from log_lib import log
+
 
 # =====================================================
 # BASIC FETCH
@@ -15,56 +17,75 @@ from selenium.webdriver.support import expected_conditions as EC
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
 }
+user_agents = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/119 Safari/537.36"
+]
 log_path = None
+driver = None
+
+
+def get_chrome_driver():
+
+    if driver:
+        return driver
+
+    options = uc.ChromeOptions()
+    options.add_argument("--headless=new")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument(f"user-agent={random.choice(user_agents)}")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
+    driver = uc.Chrome(options=options, driver_executable_path=ChromeDriverManager().install())
+
+
+    driver = uc.Chrome(
+        driver_executable_path=ChromeDriverManager().install())
+    time.sleep(3)
+    driver.execute_script("""
+    Object.defineProperty(navigator, 'webdriver', {
+        get: () => undefined
+    })
+    """)
+
+    return driver
 
 
 def get_rendered_soup(url):
-    chrome_options = uc.ChromeOptions()
 
-    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-    chrome_options.add_argument("--lang=en")
-    chrome_options.add_argument("--headless=new")
+    driver = get_chrome_driver()
+        
+    driver.get(url)
+    if 'robot' in driver.page_source:
+        # wait for iframe
+        iframe = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.XPATH, "//iframe[contains(@src,'recaptcha')]"))
+        )
+        driver.switch_to.frame(iframe)
+        # click checkbox
+        checkbox = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.ID, "recaptcha-anchor"))
+        )
+        checkbox.click()
+        driver.switch_to.default_content()
+    wait = WebDriverWait(driver, 20) 
+    time.sleep(10)
+    html = driver.page_source
+    driver.quit()
+    return BeautifulSoup(html, "html.parser")
 
-    user_agents = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/119 Safari/537.36"
-    ]
 
-    chrome_options.add_argument(f"user-agent={random.choice(user_agents)}")
-    driver = None
-    try:
-        driver = uc.Chrome(
-            driver_executable_path=ChromeDriverManager().install())
-        time.sleep(3)
-        driver.execute_script("""
-        Object.defineProperty(navigator, 'webdriver', {
-            get: () => undefined
-        })
-        """)
-        driver.get(url)
-        if 'robot' in driver.page_source:
-            # wait for iframe
-            iframe = WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.XPATH, "//iframe[contains(@src,'recaptcha')]"))
-            )
-            driver.switch_to.frame(iframe)
-            # click checkbox
-            checkbox = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.ID, "recaptcha-anchor"))
-            )
-            checkbox.click()
-            driver.switch_to.default_content()
-        wait = WebDriverWait(driver, 20) 
-        time.sleep(10)
-        html = driver.page_source
-        driver.quit()
-        return BeautifulSoup(html, "html.parser")
-    finally:
-        if driver:
-            try:
-                driver.quit()
-            except:
-                pass
+def close_driver():
+    if driver:
+        try:
+            driver.quit()
+            log("Closed Chrome driver", log_path)
+        except:
+            pass
 
 
 def get_soup(url, params=None):
