@@ -2,6 +2,7 @@ from urllib.parse import urljoin, urlparse
 import name_processor_lib 
 import soup_content_lib 
 from log_lib import log
+from profile_processing_helper import ProfileProcessingHelper
 
 
 
@@ -20,7 +21,11 @@ class DirectoryProcessingHelper:
         "legal-team",
         "lawyers",
         "meet",
-        "profiles"
+        "profiles",
+        "about",
+        "people",
+        "paralegals",
+        "advocates"
     ]
 
 
@@ -35,16 +40,15 @@ class DirectoryProcessingHelper:
             href = link["href"]
             full = urljoin(home_url, href)
             if domain.replace("www.", '') not in urlparse(full).netloc \
-            and urlparse(full).netloc not in domain.replace("www.", ''):
+            and urlparse(full).netloc not in domain.replace("www.", '') or not urlparse(full).netloc:
                 continue
 
             lower = full.lower()
             if any(k in lower for k in self.DIRECTORY_KEYWORDS):
                 candidates.append(full)
 
-        log(list(set(candidates)), self.log_path)
+        log(f"Directory Candiates: {list(set(candidates))}", self.log_path)
         return list(set(candidates))
-
 
 
     def score_directory_candidate(self, directory_url, home_url):
@@ -60,6 +64,7 @@ class DirectoryProcessingHelper:
             score -= 5
 
         if name_processor_lib.is_profile_slug(directory_url, False):
+
             score -= 10
 
         soup = soup_content_lib.get_soup(directory_url)
@@ -70,11 +75,17 @@ class DirectoryProcessingHelper:
         main = soup_content_lib.get_main_content(soup, depth == 0)
 
         # Header check
-        h1 = main.find("h1")
+        h1 = main.find_all("h1")
         if h1:
-            header_text = h1.get_text(strip=True).lower()
+            header_text = " ".join([el.get_text(strip=True).lower() for el in h1])
             if any(k in header_text for k in ["our team", "attorneys", "meet", "lawyers"]):
                 score += 5
+            else:
+                h2 = main.find_all("h2")
+                if h2:
+                    header_text = " ".join([el.get_text(strip=True).lower() for el in h2])
+                    if any(k in header_text for k in ["our team", "attorneys", "meet", "lawyers"]):
+                        score += 5
 
         # Count distinct names in main content only
         name_links = set()
@@ -90,21 +101,25 @@ class DirectoryProcessingHelper:
                 name = name.replace("lawyer", "", 1)
                 name = name.replace("profile", "", 1)
 
-            if (urlparse(home_url).netloc in urlparse(full).netloc or \
+            if urlparse(full).netloc and (urlparse(home_url).netloc in urlparse(full).netloc or \
                 urlparse(full).netloc in urlparse(home_url).netloc) and \
                 name_processor_lib.looks_like_name(name):
                 name_links.add(name)
 
-        if len(name_links) >= 4:
+        if len(name_links) >= 3:
             score += 5
         else:
-            score -= 3
+            if len(ProfileProcessingHelper(self.log_path).extract_team_profiles(main, directory_url)) >= 3:
+                score += 5
+            else:
+                score -= 3
 
         # Penalize heavy paragraph density (likely practice page)
         if len(' '.join([p.get_text() for p in main.find_all("p")]).split()) > 200:
-            score -= 3
+            score -= 2
 
         return score
+
 
     def select_best_directory(self, candidates, home_url):
         domain = urlparse(home_url).netloc

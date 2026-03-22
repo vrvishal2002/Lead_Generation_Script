@@ -52,6 +52,8 @@ def is_profile_slug(url, is_profil_check=True):
     if is_profil_check:
         slug = slug.replace("attorney", "", 1)
         slug = slug.replace("lawyer", "", 1)
+        slug = slug.replace("profile", "", 1)
+        slug = slug.replace("%2C", "", 1)
     words = slug.split("-")
 
     if not (2 <= len(words) <= 4):
@@ -69,12 +71,14 @@ def is_profile_slug(url, is_profil_check=True):
 
 def looks_like_name(text):
     words = text.strip().split()
-    if not (2 <= len(words) <= 4):
+    if not (len(words) <= 4 and len(words) >= 2):
         return False
-    if not all(w[0] for w in words if w and w[0].isalpha() or '.' in w):
+    if "www" in text.lower():
+        return False
+    if not all(w[0].isalpha() or '.' in w for w in words if w):
         return False
     for w in words:
-        if not is_valid_attorney_slug(w):
+        if not is_valid_attorney_slug(w.lower().replace(',', '')):
             return False
     return True
 

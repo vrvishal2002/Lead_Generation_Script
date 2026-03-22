@@ -17,7 +17,7 @@ docker run -d --name selenium-hub --network selenium-grid -p 4444:4444 selenium/
 sleep 5
 
 # Start Chrome nodes
-for i in 1 2 3; do
+for i in 1 2 3 4; do
   docker run -d --name chrome-node-$i --network selenium-grid \
     -e SE_EVENT_BUS_HOST=selenium-hub \
     -e SE_EVENT_BUS_PUBLISH_PORT=4442 \

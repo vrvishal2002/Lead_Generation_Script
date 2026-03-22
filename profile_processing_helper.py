@@ -28,7 +28,7 @@ class ProfileProcessingHelper:
     def extract_profile_links(self, directory_url, home_url):
         soup = soup_content_lib.get_soup(directory_url)
         if not soup:
-            log("not soup", self.log_path)
+            log(f"not soup for directory: {directory_url}", self.log_path)
             return []
 
         is_home_dir = False
@@ -159,3 +159,75 @@ class ProfileProcessingHelper:
             "Email": email,
             "Profile URL": url
         }
+    
+
+    def extract_team_profiles(self, soup, url):
+        profiles = []
+
+        # Common tags that hold cards
+        candidate_tags = soup.find_all(["div", "section", "li"])
+
+        name_pattern = re.compile(r'^[A-Z][a-z]+(?:\s[A-Z][a-z]+)+')  # John Doe
+        title_keywords = ["associate", "attorney", "advocate", "lawyer", "partner", "paralegal", "legal"]
+
+        for tag in candidate_tags:
+            text = tag.get_text(" ", strip=True)
+
+            # Skip tiny or irrelevant blocks
+            if len(text) < 10 or len(text) > 50:
+                continue
+
+            # Try to find title
+            title = None
+            is_profile_tag = False
+            for line in text.split("\n"):
+                line_clean = line.strip().lower()
+                for k in title_keywords:
+                    if k in line_clean:
+                        title = k
+                        break
+                if title:
+                    for k in title_keywords:
+                        line_clean.replace(k, '')
+                    line_clean.replace('/', ' ').replace('&', ' ')  # Debugging output
+                    if line_clean.split(title)[0].strip():
+                        name = line_clean.split(title)[0].split('\n')[-1].strip()  # In case it's "John Doe, Attorney"
+                    else:
+                        name = line_clean.split(title)[-1].split('\n')[-1].strip()  # In case it's "John Doe Attorney"
+                    if name_processor_lib.looks_like_name(name):
+                        is_profile_tag = True
+                        break
+            
+            if not is_profile_tag:
+                continue
+
+            # Extract email if present
+            email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', text)
+            email = email_match.group() if email_match else None
+
+
+            phone_match = re.search(r'\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}', text)
+            phone = phone_match.group() if phone_match else ""
+
+            profiles.append({
+                "Name": name,
+                "Phone": phone,
+                "Email": email,
+                "Profile URL": url
+            })
+
+        # Remove duplicates
+        unique_profiles = []
+        seen = set()
+
+        for p in profiles:
+            key = p["Name"]
+            if key not in seen:
+                seen.add(key)
+                unique_profiles.append(p)
+
+        log(f"Extracted {len(unique_profiles)} profiles from directory page: {url}", self.log_path)
+        for p in unique_profiles:
+            log(p, self.log_path)
+
+        return unique_profiles

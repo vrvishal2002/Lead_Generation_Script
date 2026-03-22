@@ -1,3 +1,5 @@
+from contextlib import contextmanager
+
 import requests
 import re, time, random
 import copy
@@ -7,6 +9,10 @@ from selenium.webdriver.common.by import By
 import undetected_chromedriver as uc
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+import threading
 
 from log_lib import log
 
@@ -23,6 +29,26 @@ user_agents = [
 ]
 log_path = None
 driver = None
+DRIVERS_COUNT = 4
+selenium_driver_lock = threading.Semaphore(DRIVERS_COUNT)
+
+
+@contextmanager
+def selenium_chrome_driver():
+
+    with selenium_driver_lock:
+        chrome_options = Options()
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        
+        driver = webdriver.Remote(
+            command_executor='http://13.235.23.148:4444',
+            options=chrome_options
+        )
+        try:
+            yield driver  # this gives control to your test code
+        finally:
+            driver.quit()  # quits automatically after the block
 
 
 def get_chrome_driver():
@@ -57,26 +83,25 @@ def get_chrome_driver():
 
 def get_rendered_soup(url):
 
-    driver = get_chrome_driver()
-        
-    driver.get(url)
-    if 'robot' in driver.page_source:
-        # wait for iframe
-        iframe = WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.XPATH, "//iframe[contains(@src,'recaptcha')]"))
-        )
-        driver.switch_to.frame(iframe)
-        # click checkbox
-        checkbox = WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable((By.ID, "recaptcha-anchor"))
-        )
-        checkbox.click()
-        driver.switch_to.default_content()
-    wait = WebDriverWait(driver, 20) 
-    time.sleep(10)
-    html = driver.page_source
-    driver.quit()
-    return BeautifulSoup(html, "html.parser")
+    # driver = get_chrome_driver()
+    with selenium_chrome_driver() as driver:
+        driver.get(url)
+        if 'not a robot' in driver.page_source:
+            # wait for iframe
+            log(f"{url}: Encountered anti-bot, waiting for captcha to load...", log_path)
+            iframe = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.XPATH, "//iframe[contains(@src,'recaptcha')]"))
+            )
+            driver.switch_to.frame(iframe)
+            # click checkbox
+            checkbox = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.ID, "recaptcha-anchor"))
+            )
+            checkbox.click()
+            driver.switch_to.default_content()
+        time.sleep(10)
+        html = driver.page_source
+        return BeautifulSoup(html, "html.parser")
 
 
 def close_driver():
@@ -93,10 +118,11 @@ def get_soup(url, params=None):
         r = requests.get(url, headers=HEADERS, timeout=10, params=params)
         if r.status_code and r.text:
             soup = BeautifulSoup(r.text, "html.parser")
-            if len(soup.find_all()) < 30 or "not a robot" in str(soup):
+            if len(soup.find_all()) < 50 or "not a robot" in str(soup):
                 return get_rendered_soup(url)
             return BeautifulSoup(r.text, "html.parser")
-    except:
+    except Exception as e:
+        log(f"Error fetching {url}: {e}", log_path)
         return None
 
 

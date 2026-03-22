@@ -41,7 +41,7 @@ class EmailVerifier:
     
 
     def __init__(self, log_path=None):
-        self.timeout = 3
+        self.timeout = 10
         self.log_path = log_path
 
 
@@ -181,6 +181,7 @@ class EmailVerifier:
         if domain in email_pattern_for_domain:
             pattern = email_pattern_for_domain[domain]
 
+        full_name = full_name.lower().replace(",", "").replace(".", "").replace("-", " ").strip()
         if len(full_name.split()) == 1:
             return [f"{full_name.lower()}@{domain}"]
 
@@ -300,7 +301,7 @@ class EmailVerifier:
                         server.starttls()
                         server.ehlo(USER_DOMAIN)
 
-                    sender = f"probe@{USER_DOMAIN}"
+                    sender = f"admin@{[domain, USER_DOMAIN][itr % 2]}"
 
                     server.mail(sender)
 
@@ -318,6 +319,8 @@ class EmailVerifier:
             undeliverable_emails = [[email, code] for email, code in results.items() if code in [550, 551, 553]]
             if len(unverifiable_emails) == 1 and len(undeliverable_emails) == len(results) - 1 and undeliverable_emails and unverifiable_emails:
                 log(f"Email: {unverifiable_emails[0][0]} gives status_code: {unverifiable_emails} and other patterns status_code in {[551, 551, 553]} {undeliverable_emails}, for iteration {itr}", self.log_path)
+                
+                # RECURSIVE CALL FIX: Only retry the unverifiable one, or do not retry if max attempts reached.
                 return self.smtp_batch_check(
                     emails, 
                     mx_hosts, 
@@ -355,14 +358,16 @@ class EmailVerifier:
                 return None, results, itr
 
         except (socket.timeout, smtplib.SMTPException, ssl.SSLError, socket.gaierror) as e:
-            log(f"SMTP batch error: {e}", self.log_path)
+            log(f"SMTP batch error for {domain}: {e}", self.log_path)
             if itr < MAX_ITERATIONS:
-                return self.smtp_batch_check(
-                    emails,
-                    mx_hosts,
-                    itr + 1,
-                    results
-                )
+                results[domain] = f"error: {e}"
+                if not isinstance(e, socket.timeout):
+                    return self.smtp_batch_check(
+                        emails,
+                        mx_hosts,
+                        itr + 1,
+                        results
+                    )
         return None, results, itr
 
 
@@ -381,11 +386,12 @@ class EmailVerifier:
             log(f"email verification: {valid_emails}, reason: domain_not_found", self.log_path)
             return {"status": "invalid", "reason": "domain_not_found"}
 
-        valid_email, _, itr = self.smtp_batch_check(valid_emails, mx_records, itr)
+        valid_email, reason, itr = self.smtp_batch_check(valid_emails, mx_records, itr)
 
         return {
             "email": valid_email[0] if valid_email else None,
             "status": valid_email[1] if valid_email else "invalid",
+            "reason": reason,
             "iteration": itr
         }
     
@@ -423,13 +429,13 @@ class EmailFakeChecker:
 
         # 2 disposable
         if domain in DISPOSABLE_DOMAINS:
-            log("Disposable email domain", self.log_path)
+            log(f"Disposable email domain: {domain}", self.log_path)
             return False, "Disposable email domain"
 
         # 3 MX check
         mx_records = EmailVerifier(self.log_path).get_mx_records(domain)
         if not mx_records:
-            log("No MX records found", self.log_path)
+            log(f"No MX records found for {domain}", self.log_path)
             return False, "No MX records found"
 
         log(f"MX server: {mx_records}", self.log_path)
@@ -437,8 +443,11 @@ class EmailFakeChecker:
         # 4 SMTP verification
         for _ in range(2):
             result = EmailVerifier(self.log_path).verify([self.random_email(domain)], itr=0)
-
-            if result["status"] != "invalid":
+            log(f"Fake Email Check for {domain}: {result}", self.log_path)
+            # {'uookmxtqtr@aspelllaw.com': 550}
+            if result["status"] != "invalid" or "reason" in result and \
+                len(result["reason"]) == len([reason for reason in result["reason"].values() 
+                                              if isinstance(reason, str) and "error" in reason]):
                 log(f"Fake Email Check for {domain}: failed", self.log_path)
                 return False, result
         log(f"Fake Email Check for {domain}: Passed", self.log_path)

@@ -6,6 +6,7 @@ from selenium.webdriver.support import expected_conditions as EC
 import pandas as pd
 import time
 import random
+from soup_content_lib import selenium_chrome_driver
 from urllib.parse import urlparse, parse_qs, urljoin
 from log_lib import log
 
@@ -18,23 +19,7 @@ class FirmParser:
 
     def scrape_google_places(self, query, target=50):
 
-        chrome_options = uc.ChromeOptions()
-
-        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-        chrome_options.add_argument("--lang=en")
-        chrome_options.add_argument("--headless=new")
-
-
-        user_agents = [
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/119 Safari/537.36"
-        ]
-
-        chrome_options.add_argument(f"user-agent={random.choice(user_agents)}")
-        
-        driver = None
-        try:
-            driver = uc.Chrome(driver_executable_path=ChromeDriverManager().install())
+        with selenium_chrome_driver() as driver:
             time.sleep(3)
             driver.execute_script("""
             Object.defineProperty(navigator, 'webdriver', {
@@ -167,13 +152,13 @@ class FirmParser:
                     break
             return results
 
-        finally:
-            if driver:
-                try:
-                    driver.quit()
-                except OSError:
-                    pass
-                del driver  # explicitly remove the object
+        # finally:
+        #     if driver:
+        #         try:
+        #             driver.quit()
+        #         except OSError:
+        #             pass
+        #         del driver  # explicitly remove the object
 
 if __name__ == "__main__":
 
