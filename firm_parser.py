@@ -18,139 +18,143 @@ class FirmParser:
 
 
     def scrape_google_places(self, query, target=50):
+        
+        for try_count in range(2):
+            try:
+                with selenium_chrome_driver() as driver:
+                    time.sleep(3)
+                    driver.execute_script("""
+                    Object.defineProperty(navigator, 'webdriver', {
+                        get: () => undefined
+                    })
+                    """)
 
-        with selenium_chrome_driver() as driver:
-            time.sleep(3)
-            driver.execute_script("""
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            })
-            """)
+                    url = f"https://www.google.com/search?q={query}&tbm=lcl"
+                    log(url, self.log_path)
+                    driver.get(url)
+                    log(url, self.log_path)
 
-            url = f"https://www.google.com/search?q={query}&tbm=lcl"
-            log(url, self.log_path)
-            driver.get(url)
-            log(url, self.log_path)
+                    if 'robot' in driver.page_source:
+                        # wait for iframe
+                        iframe = WebDriverWait(driver, 10).until(
+                            EC.presence_of_element_located((By.XPATH, "//iframe[contains(@src,'recaptcha')]"))
+                        )
 
-            if 'robot' in driver.page_source:
-                # wait for iframe
-                iframe = WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.XPATH, "//iframe[contains(@src,'recaptcha')]"))
-                )
+                        driver.switch_to.frame(iframe)
 
-                driver.switch_to.frame(iframe)
+                        # click checkbox
+                        checkbox = WebDriverWait(driver, 10).until(
+                            EC.element_to_be_clickable((By.ID, "recaptcha-anchor"))
+                        )
 
-                # click checkbox
-                checkbox = WebDriverWait(driver, 10).until(
-                    EC.element_to_be_clickable((By.ID, "recaptcha-anchor"))
-                )
+                        checkbox.click()
+                        driver.switch_to.default_content()
 
-                checkbox.click()
-                driver.switch_to.default_content()
+                    wait = WebDriverWait(driver, 20)
 
-            wait = WebDriverWait(driver, 20)
+                    results = []
+                    seen_names = set()
+                    visited_websites = set()
+                    page = 1
 
-            results = []
-            seen_names = set()
-            visited_websites = set()
-            page = 1
+                    while len(results) < target:
+                        time.sleep(20)
+                        log(f"\nScraping page {page}...", self.log_path)
+                        last_height = driver.execute_script("return document.body.scrollHeight")
 
-            while len(results) < target:
-                time.sleep(20)
-                log(f"\nScraping page {page}...", self.log_path)
-                last_height = driver.execute_script("return document.body.scrollHeight")
-
-                while True:
-                    driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                    time.sleep(3)  # wait for new listings to load
-                    new_height = driver.execute_script("return document.body.scrollHeight")
-                    if new_height == last_height:
-                        break
-                    last_height = new_height
-                    # Wait until listings load
-                
-                try:
-                    wait.until(EC.presence_of_all_elements_located((By.CLASS_NAME, "VkpGBb")))
-                except:
-                    log(f"No listings found on {page} page.", self.log_path)
-                    break
-
-                listings = driver.find_elements(By.CLASS_NAME, "VkpGBb")
-                log(f"Found {len(listings)} listings.", self.log_path)
-
-                for item in listings:
-                    try:
-                        name = item.text.split("\n")[0].strip()
-
-                        if name in seen_names or "Sponsored" in name:
-                            continue
-
-                        seen_names.add(name)
-
-                        # Click listing
-                        driver.execute_script("arguments[0].click();", item)
-                        time.sleep(2)
-
-                        # Extract website link
-                        website = None
-
+                        while True:
+                            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                            time.sleep(3)  # wait for new listings to load
+                            new_height = driver.execute_script("return document.body.scrollHeight")
+                            if new_height == last_height:
+                                break
+                            last_height = new_height
+                            # Wait until listings load
+                        
                         try:
-                            # Search ONLY inside current item
-                            anchors = item.find_elements(By.TAG_NAME, "a")
-                            for a in anchors:
-                                text = a.text.strip().lower()
-                                if "website" in text:
-
-                                    raw_href = a.get_attribute("href")
-                                    log("raw_href", self.log_path)
-                                    if raw_href:
-                                        # If relative (like /aclk...)
-                                        if raw_href.startswith("/"):
-                                            raw_href = urljoin("https://www.google.com", raw_href)
-
-
-                                        parsed = urlparse(raw_href)
-
-                                        if parsed and parsed.netloc:
-                                            website = f"{parsed.scheme or 'https'}://{parsed.netloc}"
-                                        else:
-                                            website = None
-                                    break
-
+                            wait.until(EC.presence_of_all_elements_located((By.CLASS_NAME, "VkpGBb")))
                         except:
-                            website = None
-
-                        if website and website not in visited_websites:
-                            visited_websites.add(website)
-                            results.append({
-                                "Firm Name": name,
-                                "Website": website
-                            })
-                            log(f"{len(results)}.Collected: {name}", self.log_path)
-
-                        else:
-                            log(f"No website for {name}", self.log_path)
-
-
-                        if len(results) >= target:
+                            log(f"No listings found on {page} page.", self.log_path)
                             break
 
-                    except Exception as e:
-                        continue
+                        listings = driver.find_elements(By.CLASS_NAME, "VkpGBb")
+                        log(f"Found {len(listings)} listings.", self.log_path)
 
-                # Try clicking Next Page (the real Places pagination)
-                try:
-                    next_button = driver.find_element(By.ID, "pnnext")
+                        for item in listings:
+                            try:
+                                name = item.text.split("\n")[0].strip()
 
-                    driver.execute_script("arguments[0].click();", next_button)
-                    time.sleep(3)
+                                if name in seen_names or "Sponsored" in name:
+                                    continue
 
-                    page += 1
+                                seen_names.add(name)
 
-                except:
-                    log("\nNo more pages available.", self.log_path)
-                    break
-            return results
+                                # Click listing
+                                driver.execute_script("arguments[0].click();", item)
+                                time.sleep(2)
+
+                                # Extract website link
+                                website = None
+
+                                try:
+                                    # Search ONLY inside current item
+                                    anchors = item.find_elements(By.TAG_NAME, "a")
+                                    for a in anchors:
+                                        text = a.text.strip().lower()
+                                        if "website" in text:
+
+                                            raw_href = a.get_attribute("href")
+                                            log("raw_href", self.log_path)
+                                            if raw_href:
+                                                # If relative (like /aclk...)
+                                                if raw_href.startswith("/"):
+                                                    raw_href = urljoin("https://www.google.com", raw_href)
+
+
+                                                parsed = urlparse(raw_href)
+
+                                                if parsed and parsed.netloc:
+                                                    website = f"{parsed.scheme or 'https'}://{parsed.netloc}"
+                                                else:
+                                                    website = None
+                                            break
+
+                                except:
+                                    website = None
+
+                                if website and website not in visited_websites:
+                                    visited_websites.add(website)
+                                    results.append({
+                                        "Firm Name": name,
+                                        "Website": website
+                                    })
+                                    log(f"{len(results)}.Collected: {name}", self.log_path)
+
+                                else:
+                                    log(f"No website for {name}", self.log_path)
+
+
+                                if len(results) >= target:
+                                    break
+
+                            except Exception as e:
+                                continue
+
+                        # Try clicking Next Page (the real Places pagination)
+                        try:
+                            next_button = driver.find_element(By.ID, "pnnext")
+
+                            driver.execute_script("arguments[0].click();", next_button)
+                            time.sleep(3)
+
+                            page += 1
+
+                        except:
+                            log("\nNo more pages available.", self.log_path)
+                            break
+                    return results
+            except Exception as e:
+                log(f"Error While executing '{query}' in web browser: {e}", self.log_path)
 
         # finally:
         #     if driver:

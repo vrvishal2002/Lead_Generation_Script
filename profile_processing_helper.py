@@ -1,6 +1,7 @@
 import re
 import copy
 from urllib.parse import urljoin, urlparse
+import name_processor_lib
 import soup_content_lib 
 import name_processor_lib
 from log_lib import log
@@ -14,6 +15,20 @@ keywords_for_attorney_profiles = keywords = [
     "accident",
     "dog bite",
     "drug"
+]
+
+DIRECTORY_KEYWORDS = [
+    "attorneys",
+    "our-team",
+    "team",
+    "legal-team",
+    "lawyers",
+    "meet",
+    "profiles",
+    "about",
+    "people",
+    "paralegals",
+    "advocates"
 ]
 
 
@@ -42,16 +57,13 @@ class ProfileProcessingHelper:
         profile_links = []
 
         for link in main.find_all("a", href=True):
-            text = link.get_text(strip=True)
             full = urljoin(directory_url, link["href"])
             name = ""
             if full[-1] != '/':
                 name = " ".join(full.split('/')[-1].split('-'))
             else:
                 name =" ".join(full.split('/')[-2].split('-'))
-            name = name.replace("attorney", "", 1)
-            name = name.replace("lawyer", "", 1)
-            name = name.replace("profile", "", 1)
+            name = name_processor_lib.normalize_name(name)
 
             if (urlparse(home_url).netloc in urlparse(full).netloc or \
                 urlparse(full).netloc in urlparse(home_url).netloc) and \
@@ -122,6 +134,7 @@ class ProfileProcessingHelper:
         text = main.get_text(" ", strip=True)
 
         h1 = main.find("h1")
+        name = ""
         if h1:
             # Remove all child tags (like span)
             children_h1 = []
@@ -130,17 +143,28 @@ class ProfileProcessingHelper:
                 child.decompose()
             name = h1.get_text(strip=True) if h1 else ""
             for w in name.split():
-                if not name_processor_lib.is_valid_attorney_slug(w):
-                    return None
+                if not name_processor_lib.is_strong_name_word(w):
+                    name = ""
+                    break
             if name == "":
                 for words_name in children_h1:
                     name = words_name
                     for w in words_name.split():
-                        if not name_processor_lib.is_valid_attorney_slug(words_name):
+                        if not name_processor_lib.is_strong_name_word(words_name):
                             name = ""
                             break
-        else:
-            name_from_url = url.split('/')[-2].replace('-', ' ')
+            if name:
+                name_in_page = name_processor_lib.normalize_name(name)
+                name_in_link = name_processor_lib.normalize_name(url.strip('/').split('/')[-1])
+                if not name_processor_lib.names_match(name_in_page, name_in_link):
+                    if all(w in text for w in name_in_link.split()):
+                        log(f"Name in h1: {name_in_page} doesn't match name in url: {name_in_link} for {url}, but all words are in page text. Using name from url.", self.log_path)
+                        name = name_in_link
+                    else:
+                        log(f"Name in h1: {name_in_page} doesn't match name in url: {name_in_link} for {url}", self.log_path)
+                        name = ""
+        if name == "":
+            name_from_url = url.strip('/').split('/')[-1].replace('-', ' ').replace('_', ' ')
             if not name_processor_lib.looks_like_name(name_from_url):
                 return None
             name = name_from_url.capitalize()
@@ -150,55 +174,69 @@ class ProfileProcessingHelper:
 
         email_tag = main.find("a", href=re.compile("mailto:"))
         email = email_tag["href"].replace("mailto:", "") if email_tag else ""
-        if email and not name_processor_lib.is_valid_attorney_slug(email.split('@')[0]):
+        if email and not name_processor_lib.is_strong_name_word(email.split('@')[0]):
             email = ""
 
         return {
-            "Name": name,
+            "Name": name_processor_lib.normalize_name(name),
             "Phone": phone,
             "Email": email,
             "Profile URL": url
         }
     
 
+    def get_profile_name_from_text(self, text, title_keywords):
+
+        # Skip tiny or irrelevant blocks
+        if len(text) < 10 or len(text) > 50:
+            return None
+
+        is_profile_tag = False
+        for line in text.split("\n"):
+            line_clean = line.strip().lower()
+            title = None
+            for k in title_keywords:
+                if k in line_clean:
+                    title = k
+                    break
+            if title:
+                for k in title_keywords:
+                    if k is not title:
+                        line_clean = line_clean.replace(k, '')
+                line_clean = line_clean.replace('/', ' ').replace('&', ' ')  # Debugging output
+                if line_clean.split(title)[0].strip():
+                    name = line_clean.split(title)[0].split('\n')[-1].strip()  # In case it's "John Doe, Attorney"
+                else:
+                    name = line_clean.split(title)[-1].split('\n')[-1].strip()  # In case it's "John Doe Attorney"
+                if name_processor_lib.looks_like_name(name):
+                    is_profile_tag = True
+                    break
+        if is_profile_tag:
+            return name
+        return None
+
+
     def extract_team_profiles(self, soup, url):
         profiles = []
 
         # Common tags that hold cards
-        candidate_tags = soup.find_all(["div", "section", "li"])
+        candidate_tags = soup.find_all(["div", "section", "li", "h2", "h1", "p"])
 
         name_pattern = re.compile(r'^[A-Z][a-z]+(?:\s[A-Z][a-z]+)+')  # John Doe
-        title_keywords = ["associate", "attorney", "advocate", "lawyer", "partner", "paralegal", "legal"]
+        title_keywords = ["associate", "attorney", "advocate", "lawyer", "partner", "paralegal", "legal", "about", "esq.", "of counsel", "senior", "principal"]
 
         for tag in candidate_tags:
             text = tag.get_text(" ", strip=True)
 
-            # Skip tiny or irrelevant blocks
-            if len(text) < 10 or len(text) > 50:
-                continue
-
             # Try to find title
-            title = None
-            is_profile_tag = False
-            for line in text.split("\n"):
-                line_clean = line.strip().lower()
-                for k in title_keywords:
-                    if k in line_clean:
-                        title = k
-                        break
-                if title:
-                    for k in title_keywords:
-                        line_clean.replace(k, '')
-                    line_clean.replace('/', ' ').replace('&', ' ')  # Debugging output
-                    if line_clean.split(title)[0].strip():
-                        name = line_clean.split(title)[0].split('\n')[-1].strip()  # In case it's "John Doe, Attorney"
-                    else:
-                        name = line_clean.split(title)[-1].split('\n')[-1].strip()  # In case it's "John Doe Attorney"
-                    if name_processor_lib.looks_like_name(name):
-                        is_profile_tag = True
-                        break
+            name = self.get_profile_name_from_text(text, title_keywords)
             
-            if not is_profile_tag:
+            if not name:
+                children = tag.find_all(recursive=False)[:2]
+                text = " ".join([child.get_text(strip=True) for child in children])
+                name = self.get_profile_name_from_text(text, title_keywords)
+
+            if not name:
                 continue
 
             # Extract email if present
@@ -210,7 +248,7 @@ class ProfileProcessingHelper:
             phone = phone_match.group() if phone_match else ""
 
             profiles.append({
-                "Name": name,
+                "Name": name_processor_lib.normalize_name(name),
                 "Phone": phone,
                 "Email": email,
                 "Profile URL": url

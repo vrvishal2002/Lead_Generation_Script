@@ -21,7 +21,6 @@ dist/
 build/
 *.egg
 *.egg-info/
-attorney_profiles/
 logs/
 debug.log
 coverage/

@@ -3,9 +3,11 @@
 # chmod +x start-selenium-grid.sh
 # docker ps
 
+# ssh -i "C:\Users\DELL\Downloads\selenium-grid-key-pair.pem" ubuntu@13.235.23.148
+
 # Stop and remove old containers if they exist
-docker stop selenium-hub chrome-node-1 chrome-node-2 chrome-node-3 2>/dev/null
-docker rm selenium-hub chrome-node-1 chrome-node-2 chrome-node-3 2>/dev/null
+docker stop selenium-hub chrome-node-1 chrome-node-2 chrome-node-3 chrome-node-4 chrome-node-5 chrome-node-6 2>/dev/null
+docker rm selenium-hub chrome-node-1 chrome-node-2 chrome-node-3 chrome-node-4 chrome-node-5 chrome-node-6 2>/dev/null
 
 # Create Docker network if it doesn't exist
 docker network inspect selenium-grid >/dev/null 2>&1 || docker network create selenium-grid
@@ -17,7 +19,7 @@ docker run -d --name selenium-hub --network selenium-grid -p 4444:4444 selenium/
 sleep 5
 
 # Start Chrome nodes
-for i in 1 2 3 4; do
+for i in 1 2 3 4 5 6; do
   docker run -d --name chrome-node-$i --network selenium-grid \
     -e SE_EVENT_BUS_HOST=selenium-hub \
     -e SE_EVENT_BUS_PUBLISH_PORT=4442 \

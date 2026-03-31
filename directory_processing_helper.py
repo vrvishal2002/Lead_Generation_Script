@@ -3,6 +3,7 @@ import name_processor_lib
 import soup_content_lib 
 from log_lib import log
 from profile_processing_helper import ProfileProcessingHelper
+from bs4 import BeautifulSoup
 
 
 
@@ -47,7 +48,7 @@ class DirectoryProcessingHelper:
             if any(k in lower for k in self.DIRECTORY_KEYWORDS):
                 candidates.append(full)
 
-        log(f"Directory Candiates: {list(set(candidates))}", self.log_path)
+        log(f"{home_url} - Directory Candiates: {list(set(candidates))}", self.log_path)
         return list(set(candidates))
 
 
@@ -57,35 +58,46 @@ class DirectoryProcessingHelper:
         depth = name_processor_lib.path_depth(directory_url)
 
         if depth <= 1:
-            score += 5
+            score += 4
         elif depth == 2:
-            score += 2
+            score += 3
         else:
-            score -= 5
+            score -= 4
 
         if name_processor_lib.is_profile_slug(directory_url, False):
-
             score -= 10
 
         soup = soup_content_lib.get_soup(directory_url)
         if not soup:
             return -999
+        soup_copy = BeautifulSoup(str(soup), "html.parser")
 
-        soup = soup_content_lib.clean_dom(soup)
-        main = soup_content_lib.get_main_content(soup, depth == 0)
+        cleaned_soup = soup_content_lib.clean_dom(soup_copy)
+        main = soup_content_lib.get_main_content(cleaned_soup, depth == 0)
 
-        # Header check
         h1 = main.find_all("h1")
+        if not h1:
+            # In Header element checcking for h1
+            h1 = []
+            header_tags = soup.find_all("header")
+            if header_tags:
+                for header_tag in header_tags:
+                    h1_tags = header_tag.find_all("h1")
+                    if h1_tags:
+                        for el in h1_tags:
+                            h1.append(el)
+
         if h1:
             header_text = " ".join([el.get_text(strip=True).lower() for el in h1])
-            if any(k in header_text for k in ["our team", "attorneys", "meet", "lawyers"]):
-                score += 5
+            if any(k in header_text for k in ["our team", "attorneys", "meet", "lawyers", "people", "profiles", "about", "paralegals", "advocates"]):
+                score += 4
             else:
+                # Checking for all h2 in main content
                 h2 = main.find_all("h2")
                 if h2:
                     header_text = " ".join([el.get_text(strip=True).lower() for el in h2])
-                    if any(k in header_text for k in ["our team", "attorneys", "meet", "lawyers"]):
-                        score += 5
+                    if any(k in header_text for k in ["our team", "attorneys", "meet", "lawyers", "people", "profiles", "about", "paralegals", "advocates"]):
+                        score += 4
 
         # Count distinct names in main content only
         name_links = set()
@@ -97,20 +109,27 @@ class DirectoryProcessingHelper:
                 name = " ".join(full.split('/')[-1].split('-'))
             else:
                 name =" ".join(full.split('/')[-2].split('-'))
-                name = name.replace("attorney", "", 1)
-                name = name.replace("lawyer", "", 1)
-                name = name.replace("profile", "", 1)
+            name = name_processor_lib.normalize_name(name)
 
             if urlparse(full).netloc and (urlparse(home_url).netloc in urlparse(full).netloc or \
                 urlparse(full).netloc in urlparse(home_url).netloc) and \
                 name_processor_lib.looks_like_name(name):
                 name_links.add(name)
 
-        if len(name_links) >= 3:
-            score += 5
+        profiles_count = len(name_links)
+        if len(name_links):
+            if len(name_links) >= 3:
+                score += 6
+            else:
+                score += len(name_links) * 2  # small boost for 1-2 names
         else:
-            if len(ProfileProcessingHelper(self.log_path).extract_team_profiles(main, directory_url)) >= 3:
-                score += 5
+            profiles = ProfileProcessingHelper(self.log_path).extract_team_profiles(main, directory_url)
+            profiles_count = len(profiles)
+            if profiles_count:
+                if profiles_count >= 3:
+                    score += 6
+                else:
+                    score += profiles_count * 1.5 # small boost for 1-2 profiles
             else:
                 score -= 3
 
@@ -118,7 +137,7 @@ class DirectoryProcessingHelper:
         if len(' '.join([p.get_text() for p in main.find_all("p")]).split()) > 200:
             score -= 2
 
-        return score
+        return score, profiles_count
 
 
     def select_best_directory(self, candidates, home_url):
@@ -130,29 +149,31 @@ class DirectoryProcessingHelper:
 
         scored = [(url, self.score_directory_candidate(url, home_url)) for url in valid_candidates]
 
-        scored.sort(key=lambda x: x[1], reverse=True)
+        scored.sort(key=lambda x: (x[1][0], x[1][1]), reverse=True)
 
         log("\nDirectory Scoring:", self.log_path)
         for u, s in scored:
-            log(f"{s:3} → {u}", self.log_path)
+            log(f"{s[0]}, {s[1]} → {u}", self.log_path)
 
         if not scored:
             return None
 
         best_url, best_score = scored[0]
 
-        if best_score <= 0:
+        if best_score[0] <= 0:
             return None
 
-        if best_score < 7:
+        if best_score[0] < 7 or not best_score[1]:
             return home_url
 
         dir_urls_s = []
         for u, s in scored:
             count = 0
-            if s < best_score:
+            if s[0] < best_score[0]:
                 break
-            keys = ['our', 'team', 'attorneys', 'meet', 'people', 'lawyer']
+            if not s[1]:
+                continue
+            keys = ['our', 'team', 'attorneys', 'meet', 'people', 'lawyers', 'about', 'paralegals', 'advocates', 'profiles']
             b_u = u
             if b_u[-1] == '/':
                 b_u = u[:-1]

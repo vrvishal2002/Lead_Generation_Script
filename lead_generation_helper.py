@@ -5,27 +5,28 @@ import time
 from urllib.parse import urlparse
 from firm_scraper import FirmScraper
 from email_verifier import EmailVerifier, EmailFakeChecker
-from log_lib import get_log_name, log
+from log_lib import get_log_name, log, csv_file_lock
 import name_processor_lib
 from queue import Queue
 
-firm_queue = Queue(maxsize=1000)
-profile_queue = Queue(maxsize=1000)
-result_queue = Queue(maxsize=1000)
 log_path = get_log_name()
-profile_file_name = "attorney_profiles/attorney_profiles_final.csv"
+profile_file_name = "attorney_profiles_final.csv"
 name_processor_lib.log_path = log_path
 
 
 class LeadGenerationHelper:
 
-    def __init__(self):
+    def __init__(self, city="", state=""):
         self.log_path = log_path
         self.gathered_domain_names = set()
         self.gathered_profile_names = set()
         self.domains_with_no_leads = set()
-        self.city = ""
-        self.state = ""
+        self.city = city
+        self.state = state
+        self.firm_queue = Queue(maxsize=1000)
+        self.profile_queue = Queue(maxsize=1000)
+        self.result_queue = Queue(maxsize=1000)
+        self.monitor_queue = Queue(maxsize=1)
         self.profile_names = set()
         self.domain_with_no_profiles_cache = {}
         self.domain_with_no_profiles_cache_lock = threading.Lock()
@@ -34,7 +35,12 @@ class LeadGenerationHelper:
 
     @staticmethod
     def get_attorney_file_name(state="", city=""):
-        return f"{profile_file_name.split('.')[0]}_{city}_{state}.csv"
+        if state:
+            if not os.path.exists(f"attorney_profiles/{state}"):
+                os.makedirs(f"attorney_profiles/{state}")
+                print(f"Created directory: attorney_profiles/{state}")
+            return f"attorney_profiles/{state}/{profile_file_name.split('.')[0]}_{city}_{state}.csv"
+        return f"attorney_profiles/{profile_file_name.split('.')[0]}_{city}_{state}.csv"
 
 
     @staticmethod
@@ -49,7 +55,11 @@ class LeadGenerationHelper:
         scraper = FirmScraper(log_path=log_path)
 
         while True:
-            firm = firm_queue.get()
+            firm = self.firm_queue.get()
+            if firm is None:
+                self.firm_queue.task_done()
+                break
+
             website = firm.get("Website", "")
             firm_name = firm.get("Firm Name", "Unknown Firm")
             domain = self.get_domain(website)
@@ -70,15 +80,20 @@ class LeadGenerationHelper:
                 log(f"Checking fake email acceptance for firm {firm_name}...", log_path)
                 check_fake = fake_checker.verify_email(domain)
                 if not check_fake[0]:
-                    log(f"Domain {domain} is accepting fake emails, skipping firm {firm_name}.", log_path)
-                    continue
+                    log(f"Domain {domain} is accepting fake emails, So will check through web for {firm_name}.", log_path)
+                    firm["accept_fake"] = True
 
                 profiles = scraper.scrape_firm(website)
                 log(f"Found {len(profiles)} profiles for {firm_name}", log_path)
 
                 for profile in profiles:
                     profile["Firm Name"] = firm_name
-                    profile_queue.put(profile)
+                    if "accept_fake" not in firm:
+                        profile["accept_fake"] = False
+                    else: 
+                        profile["accept_fake"] = True
+                    
+                    self.profile_queue.put(profile)
 
             except Exception as e:
                 error_trace = traceback.format_exc()
@@ -86,14 +101,18 @@ class LeadGenerationHelper:
                 log(f"Error trace for firm {firm_name}: {error_trace}", log_path)
 
             finally:
-                firm_queue.task_done()
+                self.firm_queue.task_done()
 
 
     def email_worker(self):
         verifier = EmailVerifier(log_path=log_path)
 
         while True:
-            profile = profile_queue.get()
+            profile = self.profile_queue.get()
+            if profile is None:
+                self.profile_queue.task_done()
+                break
+
             profile_name = profile.get("Name", "Unknown")
             profile_domain = self.get_domain(profile.get("Profile URL", ""))
 
@@ -108,59 +127,80 @@ class LeadGenerationHelper:
 
                 email = (profile.get("Email") or "").strip()
 
-                if email and not name_processor_lib.is_valid_attorney_slug(email.split("@")[0]):
+                status = "From the website"
+                if email and not name_processor_lib.is_strong_name_word(email.split("@")[0]):
+                    log(f"Email {email} for profile {profile_name} does not have a valid slug. Discarding email.", log_path)
                     email = ""
-
-                if email:
-                    verified = verifier.verify(emails=[email])
-                    if verified["status"] == "invalid":
-                        email = ""
+                if email and not verifier.detect_pattern(profile_name, email):
+                    email_alpha_list = [char for char in email.split("@")[0].lower() if char.isalpha()]
+                    profile_alpha_list = [char for char in profile_name.lower() if char.isalpha()]
+                    for char in email_alpha_list:
+                        if char not in profile_alpha_list:
+                            log(f"Email {email} for profile {profile_name} does not match name pattern. Discarding email.", log_path)
+                            email = ""
+                            break
 
                 if not email and profile_name and profile_domain:
-                    email = verifier.get_valid_email(profile_name, profile_domain)
+                    if profile['accept_fake']:
+                        email_result = verifier.verify_via_web(profile_name, profile_domain)
+                    else:
+                        email_result = verifier.get_valid_email(profile_name, profile_domain)
+                    if email_result:
+                        email = email_result[0]
+                        status = email_result[1]
+                    
 
                 if email:
                     profile["Email"] = email
                     profile["City"] = self.city
                     profile["State"] = self.state
-                    result_queue.put(profile)
+                    profile["Verified By"] = status
+                    self.result_queue.put(profile)
 
                     if self.domain_with_no_profiles_cache is not None and self.domain_with_no_profiles_cache_lock is not None and profile_domain:
                         with self.domain_with_no_profiles_cache_lock:
                             self.domain_with_no_profiles_cache[profile_domain] = False
 
             except Exception as e:
-                log(f"{profile_name}: Email worker error {e}", log_path)
+                log(f"{profile_name}: Email worker error {e}\n traceback{traceback.format_exc()}", log_path)
 
             finally:
-                profile_queue.task_done()
+                self.profile_queue.task_done()
 
 
     def csv_writer(self):
         while True:
-            profile = result_queue.get()
+            profile = self.result_queue.get()
 
             try:
                 df = pd.DataFrame([profile])
-
-                df.to_csv(
-                    self.get_attorney_file_name(state=profile.get("State", ""), city=profile.get("City", "")),
-                    mode="a",
-                    header=False,
-                    index=False
-                )
+                
+                with csv_file_lock:
+                    df.to_csv(
+                        self.get_attorney_file_name(state=profile.get("State", ""), city=profile.get("City", "")),
+                        mode="a",
+                        header=False,
+                        index=False
+                    )
 
             except Exception as e:
                 log(f"CSV write error {e}", log_path)
 
             finally:
-                result_queue.task_done()
+                self.result_queue.task_done()
 
 
     def monitor(self):
         while True:
+            # Check if we should stop
+            if not self.monitor_queue.empty():
+                val = self.monitor_queue.get()
+                if val is None:
+                    self.monitor_queue.task_done()
+                    break
+
             log(
-                f"Queues → firm:{firm_queue.qsize()} profile:{profile_queue.qsize()} result:{result_queue.qsize()}",
+                f"Queues → firm:{self.firm_queue.qsize()} profile:{self.profile_queue.qsize()} result:{self.result_queue.qsize()}",
                 log_path
             )
             time.sleep(5)

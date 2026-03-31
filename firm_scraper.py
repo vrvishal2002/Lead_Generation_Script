@@ -29,7 +29,7 @@ class FirmScraper:
         log(f"\n{home_url} : Selected Directory:{directory_url}", self.log_path)
 
         profile_links = ProfileProcessingHelper(log_path=self.log_path).extract_profile_links(directory_url, home_url)
-        log(f"\n{home_url} : Profiles Found: {len(profile_links)}", self.log_path)
+        log(f"\n{directory_url} : Profiles Found: {len(profile_links)}", self.log_path)
 
         if not profile_links:
             profile_links = ProfileProcessingHelper(log_path=self.log_path).extract_profile_links(home_url, home_url)
@@ -38,8 +38,14 @@ class FirmScraper:
         if not profile_links:
             soup = soup_content_lib.get_soup(directory_url)
             if soup:
-                return ProfileProcessingHelper(log_path=self.log_path).extract_team_profiles(soup, directory_url)
+                profiles = ProfileProcessingHelper(log_path=self.log_path).extract_team_profiles(soup, directory_url)
+                if profiles:
+                    log(f'\n{directory_url} : Profiles Found in Team: {len(profiles)}: {profiles}', self.log_path)
+                return profiles
 
+        if not profile_links:
+            return []
+        
         for p in profile_links:
             log(p, self.log_path)
 

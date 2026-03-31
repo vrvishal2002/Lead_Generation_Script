@@ -36,7 +36,7 @@ def process_firm(firm):
     for profile in profiles.copy():
         attorney_email = ''
         log(f"{firm['Firm Name']}: {profile}", log_path)
-        if profile['Email'] != '' and name_processor_lib.is_valid_attorney_slug(profile['Email'].split('@')[0]) and \
+        if profile['Email'] != '' and name_processor_lib.is_strong_name_word(profile['Email'].split('@')[0]) and \
             EmailVerifier(log_path=log_path).verify(profile["Email"])["status"] == "valid":
             attorney_email = profile["Email"]
         else:

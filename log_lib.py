@@ -1,4 +1,5 @@
 import os, csv
+from pathlib import Path
 from datetime import datetime
 from threading import Lock 
 from urllib.parse import urlparse
@@ -8,6 +9,7 @@ from urllib.parse import urlparse
 LOG_DIR = "logs"
 os.makedirs(LOG_DIR, exist_ok=True)
 log_lock = Lock()
+csv_file_lock = Lock()
 
 
 def get_log_name():
@@ -42,17 +44,17 @@ def get_lead_profile_names():
     data = []
     folder_path = "attorney_profiles"
 
-    for file_name in os.listdir(folder_path):
-        if file_name.endswith(".csv"):
-            file_path = os.path.join(folder_path, file_name)
-            
-            print(f"Reading: {file_name}")
-            
-            with open(file_path, encoding="utf-8", errors="ignore") as f:
-                reader = csv.reader(f)
+    with csv_file_lock:
+        for file_name in Path(folder_path).rglob("*.csv"):
+            if file_name.suffix == ".csv":
                 
-                for row in reader:
-                    data.append(row)
+                print(f"Reading: {file_name}")
+                
+                with open(file_name, encoding="utf-8", errors="ignore") as f:
+                    reader = csv.reader(f)
+                    
+                    for row in reader:
+                        data.append(row)
 
     # Print result
     profile_name_set = set()
@@ -66,17 +68,19 @@ def get_domain_names():
     data = []
     folder_path = "attorney_profiles"
 
-    for file_name in os.listdir(folder_path):
-        if file_name.endswith(".csv"):
-            file_path = os.path.join(folder_path, file_name)
-            
-            print(f"Reading: {file_name}")
-            
-            with open(file_path, encoding="utf-8", errors="ignore") as f:
-                reader = csv.reader(f)
+    with csv_file_lock:
+        for file_name in Path(folder_path).rglob("*.csv"):
+            if file_name.suffix == ".csv":
                 
-                for row in reader:
-                    data.append(row)
+                print(f"Reading: {file_name}")
+                
+                with open(file_name, encoding="utf-8", errors="ignore") as f:
+                    reader = csv.reader(f)
+                    
+                    for row in reader:
+                        data.append(row)
+    
+
 
     # Print result
     domain_set = set()

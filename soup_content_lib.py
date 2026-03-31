@@ -4,9 +4,7 @@ import requests
 import re, time, random
 import copy
 from bs4 import BeautifulSoup
-from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
-import undetected_chromedriver as uc
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
@@ -29,7 +27,7 @@ user_agents = [
 ]
 log_path = None
 driver = None
-DRIVERS_COUNT = 4
+DRIVERS_COUNT = 5
 selenium_driver_lock = threading.Semaphore(DRIVERS_COUNT)
 
 
@@ -37,6 +35,7 @@ selenium_driver_lock = threading.Semaphore(DRIVERS_COUNT)
 def selenium_chrome_driver():
 
     with selenium_driver_lock:
+        time.sleep(random.uniform(0.5, 1.5))
         chrome_options = Options()
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
@@ -51,34 +50,34 @@ def selenium_chrome_driver():
             driver.quit()  # quits automatically after the block
 
 
-def get_chrome_driver():
+# def get_chrome_driver():
 
-    if driver:
-        return driver
+#     if driver:
+#         return driver
 
-    options = uc.ChromeOptions()
-    options.add_argument("--headless=new")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--window-size=1920,1080")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument(f"user-agent={random.choice(user_agents)}")
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option('useAutomationExtension', False)
-    driver = uc.Chrome(options=options, driver_executable_path=ChromeDriverManager().install())
+#     options = uc.ChromeOptions()
+#     options.add_argument("--headless=new")
+#     options.add_argument("--disable-gpu")
+#     options.add_argument("--no-sandbox")
+#     options.add_argument("--disable-dev-shm-usage")
+#     options.add_argument("--window-size=1920,1080")
+#     options.add_argument("--disable-blink-features=AutomationControlled")
+#     options.add_argument(f"user-agent={random.choice(user_agents)}")
+#     options.add_experimental_option("excludeSwitches", ["enable-automation"])
+#     options.add_experimental_option('useAutomationExtension', False)
+#     driver = uc.Chrome(options=options, driver_executable_path=ChromeDriverManager().install())
 
 
-    driver = uc.Chrome(
-        driver_executable_path=ChromeDriverManager().install())
-    time.sleep(3)
-    driver.execute_script("""
-    Object.defineProperty(navigator, 'webdriver', {
-        get: () => undefined
-    })
-    """)
+#     driver = uc.Chrome(
+#         driver_executable_path=ChromeDriverManager().install())
+#     time.sleep(3)
+#     driver.execute_script("""
+#     Object.defineProperty(navigator, 'webdriver', {
+#         get: () => undefined
+#     })
+#     """)
 
-    return driver
+#     return driver
 
 
 def get_rendered_soup(url):
@@ -114,16 +113,17 @@ def close_driver():
 
 
 def get_soup(url, params=None):
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=10, params=params)
-        if r.status_code and r.text:
-            soup = BeautifulSoup(r.text, "html.parser")
-            if len(soup.find_all()) < 50 or "not a robot" in str(soup):
-                return get_rendered_soup(url)
-            return BeautifulSoup(r.text, "html.parser")
-    except Exception as e:
-        log(f"Error fetching {url}: {e}", log_path)
-        return None
+    for try_count in range(2):
+        try:
+            r = requests.get(url, headers=HEADERS, timeout=10, params=params)
+            if r.status_code and r.text:
+                soup = BeautifulSoup(r.text, "html.parser")
+                if len(soup.find_all()) < 50 or "not a robot" in str(soup):
+                    return get_rendered_soup(url)
+                return BeautifulSoup(r.text, "html.parser")
+        except Exception as e:
+            log(f"Error in iteration {try_count} while fetching {url}: {e}", log_path)
+            
 
 
 def check_email_in_search_results(emails):
@@ -189,9 +189,6 @@ def get_main_content(soup, is_home_page = False):
     exclude_element = ["header", "footer"]
     if is_home_page:
         return soup
-        include_name = r"(nav|header)"
-        include_element = ["nav", "header"]
-        exclude_element = ["footer", "article"]
 
     pattern = re.compile(include_name, re.I)
 

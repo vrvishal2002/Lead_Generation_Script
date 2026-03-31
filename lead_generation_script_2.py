@@ -76,30 +76,31 @@ def run_city(city, state, query, target, leadGenretionHelper):
 
 
 if __name__ == "__main__":
-    state = "Connecticut"
+    state = "Missouri"
     cities = [
-        # "Andover","Ansonia","Ashford","Avon","Barkhamsted","Beacon Falls","Berlin","Bethany","Bethel","Bethlehem","Bloomfield",
-        # "Bolton","Bozrah","Branford","Bridgeport","Bridgewater","Bristol","Brookfield","Brooklyn","Burlington",
-        # "Canaan","Canterbury","Canton","Chaplin","Cheshire","Chester","Clinton","Colchester","Colebrook","Columbia",
-        # "Cornwall","Coventry","Cromwell","Danbury","Darien","Deep River","Derby",
-        "Durham"
-        # "East Granby","East Haddam"
-        # "East Hampton","East Hartford","East Haven","East Lyme","East Windsor","Eastford","Easton","Ellington","Enfield","Essex",
-        # "Fairfield","Farmington","Franklin","Glastonbury","Goshen","Granby","Greenwich","Griswold","Groton","Guilford",
-        # "Haddam","Hamden","Hampton","Hartland","Harwinton","Hebron","Kent","Killingly","Killingworth",
-        # "Lebanon","Ledyard","Lisbon","Litchfield","Lyme","Madison","Manchester","Mansfield","Marlborough","Meriden",
-        # "Middlebury","Middlefield","Middletown","Milford","Monroe","Montville","Morris","Naugatuck","New Britain","New Canaan",
-        # "New Fairfield","New Hartford","New London","New Milford","Newington","Newtown","Norfolk","North Branford","North Canaan",
-        # "North Haven","North Stonington","Norwalk","Norwich","Old Lyme","Old Saybrook","Orange","Oxford","Plainfield","Plainville",
-        # "Plymouth","Pomfret","Portland","Preston","Prospect","Putnam","Redding","Ridgefield","Rocky Hill","Roxbury",
-        # "Salem","Salisbury","Scotland","Seymour","Sharon","Shelton","Sherman","Simsbury","Somers","South Windsor",
-        # "Southbury","Southington","Sprague","Stafford","Stamford","Sterling","Stonington","Stratford","Suffield","Thomaston",
-        # "Thompson","Tolland","Torrington","Trumbull","Union","Vernon","Voluntown","Wallingford","Warren","Washington",
-        # "Waterbury","Waterford","Watertown","West Hartford","West Haven","Westbrook","Weston","Westport","Wethersfield","Willington",
-        # "Wilton","Winchester","Windham","Windsor","Windsor Locks","Wolcott","Woodbridge","Woodbury","Woodstock"
-    ]
-
-    leadGenretionHelper = lead_generation_helper.LeadGenerationHelper()
+    # "Kansas City", "St. Louis", 
+    # "Springfield", "Columbia", "Independence", "O'Fallon", "St. Charles",
+    "Lee's Summit", "St. Joseph", "St. Peters", 
+    "Blue Springs", "Joplin", "Florissant", "Wentzville", "Chesterfield", 
+    "Jefferson City", "Cape Girardeau", "Wildwood", "University City", "Liberty", 
+    "Ballwin", "Kirkwood", "Raytown", "Gladstone", "Nixa", 
+    "Raymore", "Maryland Heights", "Belton", "Grandview", "Hazelwood", 
+    "Webster Groves", "Ozark", "Sedalia", "Republic", "Arnold", 
+    "Rolla", "Warrensburg", "Farmington", "Lake St. Louis", "Creve Coeur", 
+    "Manchester", "Ferguson", "Kirksville", "Clayton", "Hannibal", 
+    "Poplar Bluff", "Grain Valley", "Sikeston", "Jackson", "Carthage", 
+    "Overland", "Lebanon", "Washington", "Troy", "Moberly", 
+    "Marshall", "Dardenne Prairie", "Festus", "Webb City", "Eureka", 
+    "Union", "Jennings", "Branson", "St. Ann", "West Plains", 
+    "Fulton", "Crestwood", "Town and Country", "Bolivar", "Mexico", 
+    "Excelsior Springs", "Bridgeton", "Bellefontaine Neighbors", "Maryville", "Kennett", 
+    "Cottleville", "Harrisonville", "Clinton", "Chillicothe", "Kearney", 
+    "Smithville", "Carl Junction", "Ellisville", "Ladue", "Richmond Heights", 
+    "Monett", "Neosho", "Clinton", "Parkville", "Des Peres", 
+    "Sullivan", "Berkeley", "Brentwood", "Aurora", "Boonville", 
+    "Nevada", "Warrenton", "Sunset Hills", "Richmond", "Shrewsbury"
+]
+    leadGenretionHelper = lead_generation_helper.LeadGenerationHelper(state=state)
     # Initialize the helper class to set up log path and any other necessary attributes
 
     # Start Workers as Daemon Threads
@@ -118,11 +119,13 @@ if __name__ == "__main__":
     t_monitor.start()
 
     # Main Loop
-    base_query = "medical malpractice lawyers"
-    target = 200
+    base_query = "medical malpractice and personal injury lawyers"
+    target = 1000
 
     for city in cities:
-        query = f"{base_query} in {city} CT"
+        leadGenretionHelper.city = city
+        leadGenretionHelper.state = state
+        query = f"{base_query} in {city}, {state}"
         run_city(city, state, query, target, leadGenretionHelper)
 
 
