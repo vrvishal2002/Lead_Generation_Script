@@ -27,7 +27,6 @@ class LeadGenerationHelper:
         self.profile_queue = Queue(maxsize=1000)
         self.result_queue = Queue(maxsize=1000)
         self.monitor_queue = Queue(maxsize=1)
-        self.profile_names = set()
         self.domain_with_no_profiles_cache = {}
         self.domain_with_no_profiles_cache_lock = threading.Lock()
 
@@ -121,7 +120,7 @@ class LeadGenerationHelper:
                     with self.domain_with_no_profiles_cache_lock:
                         self.domain_with_no_profiles_cache.setdefault(profile_domain, True)
 
-                if profile_name in self.profile_names:
+                if profile_name in self.gathered_profile_names:
                     log(f"Profile {profile_name} already exists. Skipping email verification.", log_path)
                     continue
 
@@ -151,6 +150,8 @@ class LeadGenerationHelper:
                     
 
                 if email:
+                    del profile["accept_fake"]
+                    self.gathered_profile_names.add(profile_name)
                     profile["Email"] = email
                     profile["City"] = self.city
                     profile["State"] = self.state

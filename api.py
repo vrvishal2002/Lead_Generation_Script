@@ -3,11 +3,12 @@ import uuid
 import time
 import os
 import csv
+import shutil
 from pathlib import Path
 import glob
 from contextlib import asynccontextmanager
 import pandas as pd
-from fastapi import FastAPI, BackgroundTasks, HTTPException, Query
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Query, File, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import List, Dict, Any
@@ -41,6 +42,8 @@ async def health_check():
 async def list_results():
     """Lists all CSV files found in the attorney_profiles directory."""
     files = glob.glob("attorney_profiles/**/*.csv", recursive=True)
+    # Filter out files in the 'uploaded' or 'consolidated' folder for generated results
+    files = [f for f in files if "uploaded" not in f.replace("\\", "/").split("/") and "consolidated" not in f.replace("\\", "/").split("/")]
     # Sort by modification time to show newest first
     files.sort(key=os.path.getmtime, reverse=True)
     return {"files": [f.replace("\\", "/") for f in files]}
@@ -51,8 +54,37 @@ async def view_result(path: str = Query(...)):
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="File not found")
     try:
-        df = pd.read_csv(path)
-        return df.fillna("").to_dict(orient="records")
+        # df = pd.read_csv(path)
+        # return df.fillna("").to_dict(orient="records")
+        headers = ["Name", "Phone", "Email", "Profile URL", "Company", "City", "State", "Verified By"]
+        with open(path, encoding="utf-8", errors="ignore") as f:
+            reader = csv.reader(f)
+            data = []
+            for row in reader:
+                entry = {}
+                row_index = 0
+                for index in range(len(headers)):
+                    if (row_index == len(row) or (row_index == len(row) - 1 and row[row_index] == "")) \
+                    and index == len(headers) - 1:
+                        entry[headers[index]] = "verified by smtp valid status"
+
+                    else:
+                        if row[row_index] in (True, False, "True", "False"):
+                            row_index += 1
+                        entry[headers[index]] = row[row_index]
+                        row_index += 1
+
+                data.append(entry)
+
+        with open(path, mode="w", encoding="utf-8", newline='') as f:
+
+            writer = csv.writer(f)
+
+            # Write existing rows
+            for row in data:
+                writer.writerow(row.values())
+            return data
+                
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -63,43 +95,109 @@ async def download_result(path: str = Query(...)):
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(path, filename=os.path.basename(path))
 
+@app.get("/results/uploaded")
+async def list_uploaded():
+    """Lists all CSV files found in the attorney_profiles/uploaded directory."""
+    files = glob.glob("attorney_profiles/uploaded/*.csv")
+    # Sort by modification time to show newest first
+    files.sort(key=os.path.getmtime, reverse=True)
+    return {"files": [f.replace("\\", "/") for f in files]}
+
+@app.post("/results/upload")
+async def upload_leads(file: UploadFile = File(...)):
+    """Uploads a leads CSV file, validates its structure, and saves it."""
+    if not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only CSV files are allowed.")
+    
+    upload_dir = Path("attorney_profiles/uploaded")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    
+    file_path = upload_dir / file.filename
+    
+    try:
+        with file_path.open("wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+            
+        df = pd.read_csv(file_path)
+        all_cols = ["Name", "Phone", "Email", "Profile URL", "Company", "City", "State", "Verified By"]
+        compulsory_cols = ["Name", "Email", "Profile URL", "Company", "City", "State", "Verified By"]
+        
+        # 1. Validate Header Structure
+        missing_headers = [col for col in all_cols if col not in df.columns]
+        if missing_headers:
+            os.remove(file_path)
+            raise HTTPException(status_code=400, detail=f"Invalid structure. Missing columns: {', '.join(missing_headers)}")
+            
+        # 2. Validate Compulsory Data (Everything except Phone)
+        # Check for nulls or empty strings in compulsory columns
+        is_empty = df[compulsory_cols].isna() | (df[compulsory_cols].astype(str).apply(lambda x: x.str.strip()) == "")
+        if is_empty.any().any():
+            os.remove(file_path)
+            raise HTTPException(status_code=400, detail="Validation failed. Mandatory fields (Name, Email, URL, Company, City, State, Verified By) cannot be empty.")
+            
+        return {"message": f"File '{file.filename}' uploaded successfully.", "rows": len(df)}
+    except Exception as e:
+        if file_path.exists(): os.remove(file_path)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/results/consolidated")
+async def list_consolidated():
+    """Lists all CSV files found in the attorney_profiles/consolidated directory."""
+    files = glob.glob("attorney_profiles/consolidated/*.csv")
+    files.sort(key=os.path.getmtime, reverse=True)
+    return {"files": [f.replace("\\", "/") for f in files]}
+
+class ConsolidateRequest(BaseModel):
+    filename: str = "attorney_profiles_master"
+    include_uploaded: bool = False
+
 @app.post("/results/consolidate")
-async def consolidate_results():
-    """Merges all CSV files into a master file."""
-    file_path = "attorney_profiles/attorney_profiles_final_New Haven_Connecticut.csv"
+async def consolidate_results(request: ConsolidateRequest):
+    """Merges CSV files into a master file with custom naming and optional upload inclusion."""
+    folder_path = "attorney_profiles"
+    
+    # Identify Generated Files
+    generated_files = glob.glob(f"{folder_path}/**/*.csv", recursive=True)
+    generated_files = [f for f in generated_files if "uploaded" not in f.replace("\\", "/").split("/") and "consolidated" not in f.replace("\\", "/").split("/")]
+    
+    files_to_process = generated_files
+    
+    # Optionally include Uploaded Files
+    if request.include_uploaded:
+        uploaded_files = glob.glob(f"{folder_path}/uploaded/*.csv")
+        files_to_process.extend(uploaded_files)
+
+    if not files_to_process:
+        return {"message": "No files found to consolidate."}
 
     data = []
-
-    folder_path = "attorney_profiles"
-
-    all_data = []
-
-    files_count = len(list(Path(folder_path).rglob("*.csv")))
-    for file_path in Path(folder_path).rglob("*.csv"):
-            
-        print(f"Reading: {file_path}")
-        
-        with open(file_path, encoding="utf-8", errors="ignore") as f:
+    for f_path in files_to_process:
+        with open(f_path, encoding="utf-8", errors="ignore") as f:
             reader = csv.reader(f)
-            
-            for row in reader:
-                data.append(row)
+            file_rows = list(reader)
+            if not file_rows: continue
+            # Skip header if present (assuming 'Name' is the first column)
+            start_idx = 1 if file_rows[0] and file_rows[0][0] == "Name" else 0
+            data.extend(file_rows[start_idx:])
 
-    # Print result
     email_set = set()
     consolidated_data = []
     for row in data:
-        if row[2] not in email_set:  # Assuming email is in the third column (index 2)
+        if not row or len(row) < 3: continue
+        email = row[2].strip().lower()
+        if email not in email_set:
             consolidated_data.append(row)
-        else:
-            print(f"Duplicate email found and skipped: {row[2]}")  # Optional: log duplicate emails
-        email_set.add(row[2])  # Assuming email is in the third column (index 2)
+            if email: email_set.add(email)
 
-    header = ["Name", "Phone", "Email", "Profile URL", "Company", "City", "State"]
+    header = ["Name", "Phone", "Email", "Profile URL", "Company", "City", "State", "Verified By"]
 
-    if not os.path.exists(f"attorney_profiles/consolidated"):
-        os.makedirs(f"attorney_profiles/consolidated")
-    with open("attorney_profiles/consolidated/attorney_profiles_master.csv", mode="w", encoding="utf-8", newline='') as file:
+    out_dir = Path("attorney_profiles/consolidated")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    
+    clean_name = request.filename.replace(".csv", "") + ".csv"
+    out_path = out_dir / clean_name
+
+    with open(out_path, mode="w", encoding="utf-8", newline='') as file:
         writer = csv.writer(file)
         
         # Write header first
@@ -107,11 +205,11 @@ async def consolidate_results():
         
         # Write existing rows
         for row in consolidated_data:
-            writer.writerow(row)
+            # Ensure row length matches header
+            row_to_write = list(row) + [""] * (len(header) - len(row))
+            writer.writerow(row_to_write[:len(header)])
 
-        return {"message": f"Consolidated {files_count} files into {file}. Total unique leads: {len(consolidated_data)}."}
-    
-    return {"message": "Consolidation failed or no valid files found."}
+        return {"message": f"Consolidated {len(files_to_process)} files into {clean_name}. Total unique leads: {len(consolidated_data)}."}
 
 # In-memory storage for active jobs. In production, use Redis or a DB.
 active_jobs: Dict[str, LeadGenerationHelper] = {}
