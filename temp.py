@@ -32,14 +32,14 @@
 # header = ["Name", "Phone", "Email", "Profile URL", "Company", "City", "State"]
 
 # with open("attorney_profiles_final_consolidated.csv", mode="w", encoding="utf-8", newline='') as file:
-#     writer = csv.writer(file)
+    # writer = csv.writer(file)
     
-#     # Write header first
-#     writer.writerow(header)
+    # # Write header first
+    # writer.writerow(header)
     
-#     # Write existing rows
-#     for row in consolidated_data:
-#         writer.writerow(row)
+    # # Write existing rows
+    # for row in consolidated_data:
+    #     writer.writerow(row)
     
 
 # print("f")

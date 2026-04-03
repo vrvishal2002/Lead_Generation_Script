@@ -1,11 +1,15 @@
 import os
 import threading
 import time
+import io
 import pandas as pd
+import boto3
 from prefect import flow, task
 from lead_generation_helper import LeadGenerationHelper
 from firm_parser import FirmParser
 from log_lib import log, get_domain_names, get_lead_profile_names
+
+S3_BUCKET = os.environ.get("S3_BUCKET_NAME")
 
 @task(name="Scrape Firms")
 def get_firms(query, target, log_path):
@@ -43,8 +47,15 @@ def scraping_flow(state: str = "Missouri", cities: list = ["Lee's Summit"], base
         if not firms:
             continue
 
-        os.makedirs("Firms_details", exist_ok=True)
-        pd.DataFrame(firms).to_csv(f"Firms_details/google_places_firms_{city}_{state}.csv", index=False)
+        file_key = f"Firms_details/google_places_firms_{city}_{state}.csv"
+        if S3_BUCKET:
+            s3_client = boto3.client('s3')
+            csv_buffer = io.StringIO()
+            pd.DataFrame(firms).to_csv(csv_buffer, index=False)
+            s3_client.put_object(Bucket=S3_BUCKET, Key=file_key, Body=csv_buffer.getvalue().encode('utf-8'))
+        else:
+            os.makedirs("Firms_details", exist_ok=True)
+            pd.DataFrame(firms).to_csv(file_key, index=False)
 
         for firm in firms:
             helper.firm_queue.put(firm)

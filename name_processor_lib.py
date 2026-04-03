@@ -1,14 +1,10 @@
 from wordfreq import zipf_frequency
 from names_dataset import NameDataset
 from urllib.parse import urljoin, urlparse
-import name_processor_lib
-import spacy
 import re
-
 
 log_path=None
 nd = NameDataset()
-nlp = spacy.load("en_core_web_sm")
 DIRECTORY_KEYWORDS = [
     "attorneys",
     "our-team",
@@ -108,7 +104,7 @@ def is_profile_slug(url, is_profil_check=True):
         slug =" ".join(path.split('/')[-2].split('-'))
 
     if is_profil_check:
-        slug = name_processor_lib.normalize_name(slug)
+        slug = normalize_name(slug)
 
     words = slug.split()
 

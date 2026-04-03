@@ -1,8 +1,9 @@
-import os, csv, pandas as pd
+import os, csv, pandas as pd, io
 import traceback
 import threading
 import time
 from urllib.parse import urlparse
+import boto3
 from firm_scraper import FirmScraper
 from email_verifier import EmailVerifier, EmailFakeChecker
 from log_lib import get_log_name, log, csv_file_lock
@@ -13,6 +14,8 @@ log_path = get_log_name()
 profile_file_name = "attorney_profiles_final.csv"
 name_processor_lib.log_path = log_path
 
+S3_BUCKET = os.environ.get("S3_BUCKET_NAME")
+s3_client = boto3.client('s3') if S3_BUCKET else None
 
 class LeadGenerationHelper:
 
@@ -35,7 +38,8 @@ class LeadGenerationHelper:
     @staticmethod
     def get_attorney_file_name(state="", city=""):
         if state:
-            if not os.path.exists(f"attorney_profiles/{state}"):
+            path = f"attorney_profiles/{state}"
+            if not S3_BUCKET and not os.path.exists(path):
                 os.makedirs(f"attorney_profiles/{state}")
                 print(f"Created directory: attorney_profiles/{state}")
             return f"attorney_profiles/{state}/{profile_file_name.split('.')[0]}_{city}_{state}.csv"
@@ -174,15 +178,28 @@ class LeadGenerationHelper:
             profile = self.result_queue.get()
 
             try:
+                file_path = self.get_attorney_file_name(state=profile.get("State", ""), city=profile.get("City", ""))
                 df = pd.DataFrame([profile])
-                
-                with csv_file_lock:
-                    df.to_csv(
-                        self.get_attorney_file_name(state=profile.get("State", ""), city=profile.get("City", "")),
-                        mode="a",
-                        header=False,
-                        index=False
-                    )
+
+                if S3_BUCKET:
+                    # S3 Append Simulation: Read existing, concatenate, upload
+                    existing_df = pd.DataFrame()
+                    try:
+                        obj = s3_client.get_object(Bucket=S3_BUCKET, Key=file_path)
+                        content = obj['Body'].read()
+                        if content and len(content.strip()) > 0:
+                            existing_df = pd.read_csv(io.BytesIO(content))
+                    except (s3_client.exceptions.NoSuchKey, pd.errors.EmptyDataError):
+                        pass
+                    
+                    final_df = pd.concat([existing_df, df], ignore_index=True)
+                    csv_buf = io.StringIO()
+                    final_df.to_csv(csv_buf, index=False)
+                    s3_client.put_object(Bucket=S3_BUCKET, Key=file_path, Body=csv_buf.getvalue().encode('utf-8'))
+                else:
+                    with csv_file_lock:
+                        header = not os.path.exists(file_path)
+                        df.to_csv(file_path, mode="a", header=header, index=False)
 
             except Exception as e:
                 log(f"CSV write error {e}", log_path)

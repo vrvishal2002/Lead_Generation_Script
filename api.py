@@ -2,25 +2,51 @@ import threading
 import uuid
 import time
 import os
-import csv
+import csv, io
 import shutil
+import boto3
 from pathlib import Path
 import glob
 from contextlib import asynccontextmanager
 import pandas as pd
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Query, File, UploadFile
+from fastapi.responses import StreamingResponse
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from lead_generation_helper import LeadGenerationHelper
 from firm_parser import FirmParser
-from log_lib import log, get_domain_names, get_lead_profile_names
+from log_lib import log, get_domain_names, get_lead_profile_names, csv_file_lock
+
+S3_BUCKET = os.environ.get("S3_BUCKET_NAME")
+s3_client = boto3.client('s3') if S3_BUCKET else None
 
 shutdown_event = threading.Event()
+
+def is_safe_path(path: str) -> bool:
+    """Validates that the path is within allowed directories."""
+    base_dirs = [
+        os.path.abspath("attorney_profiles"),
+        os.path.abspath("Firms_details")
+    ]
+    try:
+        target_path = os.path.abspath(path)
+        return any(target_path.startswith(d) for d in base_dirs)
+    except Exception:
+        return False
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup logic
+    if S3_BUCKET:
+        try:
+            # Attempt to list objects to verify IAM permissions and bucket existence
+            s3_client.list_objects_v2(Bucket=S3_BUCKET, MaxKeys=1)
+            print(f"AWS CONFIG SUCCESS: Successfully connected to S3 bucket: {S3_BUCKET}")
+        except Exception as e:
+            print(f"AWS CONFIG ERROR: Critical failure connecting to S3. Check IAM Role and S3_BUCKET_NAME.")
+            print(f"Error Detail: {str(e)}")
+
     yield
     # Shutdown logic
     log("Shutdown signal received. Cleaning up jobs...")
@@ -36,11 +62,21 @@ async def serve_dashboard():
 @app.get("/health")
 async def health_check():
     """API Health Check."""
-    return {"status": "online", "active_jobs": len(active_jobs)}
+    return {"status": "healthy", "active_jobs": len(active_jobs)}
 
 @app.get("/results")
 async def list_results():
     """Lists all CSV files found in the attorney_profiles directory."""
+    if S3_BUCKET:
+        try:
+            resp = s3_client.list_objects_v2(Bucket=S3_BUCKET, Prefix="attorney_profiles/")
+            files = [obj['Key'] for obj in resp.get('Contents', []) if obj['Key'].endswith('.csv')]
+            # Filter out consolidated/uploaded if needed
+            files = [f for f in files if "uploaded/" not in f and "consolidated/" not in f]
+            return {"files": files}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"S3 Error: {str(e)}")
+        
     files = glob.glob("attorney_profiles/**/*.csv", recursive=True)
     # Filter out files in the 'uploaded' or 'consolidated' folder for generated results
     files = [f for f in files if "uploaded" not in f.replace("\\", "/").split("/") and "consolidated" not in f.replace("\\", "/").split("/")]
@@ -48,59 +84,110 @@ async def list_results():
     files.sort(key=os.path.getmtime, reverse=True)
     return {"files": [f.replace("\\", "/") for f in files]}
 
+
+def get_file(path: str):
+    if S3_BUCKET:
+        try:
+            obj = s3_client.get_object(Bucket=S3_BUCKET, Key=path)
+            f = io.StringIO(obj['Body'].read().decode('utf-8'))
+        except s3_client.exceptions.NoSuchKey:
+            raise HTTPException(status_code=404, detail="S3 file not found")
+    else:
+        if not is_safe_path(path) or not os.path.exists(path):
+            raise HTTPException(status_code=404, detail="File not found")
+        f = open(path, encoding="utf-8", errors="ignore")
+        
+    return f
+
+
 @app.get("/results/view")
 async def view_result(path: str = Query(...)):
     """Reads a CSV file and returns the data as JSON."""
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="File not found")
     try:
-        # df = pd.read_csv(path)
-        # return df.fillna("").to_dict(orient="records")
-        headers = ["Name", "Phone", "Email", "Profile URL", "Company", "City", "State", "Verified By"]
-        with open(path, encoding="utf-8", errors="ignore") as f:
+        
+        f = get_file(path)
+        headers = ["S.No", "Name", "Phone", "Email", "Profile URL", "Company", "City", "State", "Verified By"]
+        data = []
+        
+        with csv_file_lock:
             reader = csv.reader(f)
-            data = []
+            count = 0
             for row in reader:
+                if not row: continue
                 entry = {}
+                entry["S.No"] = 1 + count
                 row_index = 0
-                for index in range(len(headers)):
-                    if (row_index == len(row) or (row_index == len(row) - 1 and row[row_index] == "")) \
-                    and index == len(headers) - 1:
-                        entry[headers[index]] = "verified by smtp valid status"
-
-                    else:
-                        if row[row_index] in (True, False, "True", "False"):
+                for index in range(1, len(headers)):
+                    # Logic to handle missing "Verified By" column gracefully in memory
+                    if row_index < len(row) and row[row_index] in headers:
+                        entry = {}
+                        break
+                    if index == len(headers) - 1 and (row_index >= len(row) or row_index == len(row) - 1 and row[row_index] == ""):
+                        entry[headers[index]] = "verified by smtp"
+                    elif row_index < len(row):
+                        # Skip boolean artifacts if present
+                        if row[row_index] in (True, False, "True", "False") and row_index + 1 < len(row):
                             row_index += 1
                         entry[headers[index]] = row[row_index]
                         row_index += 1
+                    else:
+                        entry[headers[index]] = ""  
+                if entry:
+                    count += 1
+                    data.append(entry)
 
-                data.append(entry)
 
-        with open(path, mode="w", encoding="utf-8", newline='') as f:
+            if S3_BUCKET and data:
+                output = io.StringIO()
+                writer = csv.writer(output)
+                for row in data:
+                    # Convert dict values to list, skipping S.No which is for UI only
+                    writer.writerow(list(row.values())[1:])
+                s3_client.put_object(Bucket=S3_BUCKET, Key=path, Body=output.getvalue().encode('utf-8'))
+            elif not S3_BUCKET and data:
+                with open(path, mode="w", encoding="utf-8", newline='') as f_out:
+                    writer = csv.writer(f_out)
+                    # Write existing rows (skipping S.No added for UI)
+                    for row in data:
+                        writer.writerow(list(row.values())[1:])
+        
 
-            writer = csv.writer(f)
+        return data
 
-            # Write existing rows
-            for row in data:
-                writer.writerow(row.values())
-            return data
-                
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/results/download")
 async def download_result(path: str = Query(...)):
     """Serves the CSV file for download."""
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(path, filename=os.path.basename(path))
+    if S3_BUCKET:
+        try:
+            obj = s3_client.get_object(Bucket=S3_BUCKET, Key=path)
+            return StreamingResponse(
+                io.BytesIO(obj['Body'].read()),
+                media_type="text/csv",
+                headers={"Content-Disposition": f"attachment; filename={os.path.basename(path)}"}
+            )
+        except Exception as e:
+            raise HTTPException(status_code=404, detail=f"S3 File not found: {str(e)}")
+    else:
+        if not is_safe_path(path) or not os.path.exists(path):
+            raise HTTPException(status_code=404, detail="File not found")
+        return FileResponse(path, filename=os.path.basename(path))
 
 @app.get("/results/uploaded")
 async def list_uploaded():
     """Lists all CSV files found in the attorney_profiles/uploaded directory."""
-    files = glob.glob("attorney_profiles/uploaded/*.csv")
-    # Sort by modification time to show newest first
-    files.sort(key=os.path.getmtime, reverse=True)
+    if S3_BUCKET:
+        try:
+            resp = s3_client.list_objects_v2(Bucket=S3_BUCKET, Prefix="attorney_profiles/uploaded/")
+            files = [obj['Key'] for obj in resp.get('Contents', []) if obj['Key'].endswith('.csv')]
+            return {"files": files}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"S3 Error: {str(e)}")
+    else:
+        files = glob.glob("attorney_profiles/uploaded/*.csv")
+        files.sort(key=os.path.getmtime, reverse=True)
     return {"files": [f.replace("\\", "/") for f in files]}
 
 @app.post("/results/upload")
@@ -108,41 +195,68 @@ async def upload_leads(file: UploadFile = File(...)):
     """Uploads a leads CSV file, validates its structure, and saves it."""
     if not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only CSV files are allowed.")
-    
-    upload_dir = Path("attorney_profiles/uploaded")
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    
-    file_path = upload_dir / file.filename
-    
+
+    file_path = None
+    s3_path = None
     try:
-        with file_path.open("wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-            
-        df = pd.read_csv(file_path)
+        content = await file.read()
+        if S3_BUCKET:
+            s3_path = f"attorney_profiles/uploaded/{file.filename}"
+            s3_client.put_object(Bucket=S3_BUCKET, Key=s3_path, Body=content)
+        else:
+            upload_dir = Path("attorney_profiles/uploaded")
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            file_path = upload_dir / file.filename
+            with file_path.open("wb") as buffer:
+                buffer.write(content)
+
+        # Validate CSV content
+        if not content or len(content.strip()) == 0:
+            raise HTTPException(status_code=400, detail="The uploaded CSV file is empty.")
+        
+        df = pd.read_csv(io.BytesIO(content))
+
         all_cols = ["Name", "Phone", "Email", "Profile URL", "Company", "City", "State", "Verified By"]
         compulsory_cols = ["Name", "Email", "Profile URL", "Company", "City", "State", "Verified By"]
         
         # 1. Validate Header Structure
         missing_headers = [col for col in all_cols if col not in df.columns]
         if missing_headers:
-            os.remove(file_path)
+            if S3_BUCKET:
+                s3_client.delete_object(Bucket=S3_BUCKET, Key=s3_path)
+            else:
+                os.remove(file_path)
             raise HTTPException(status_code=400, detail=f"Invalid structure. Missing columns: {', '.join(missing_headers)}")
             
         # 2. Validate Compulsory Data (Everything except Phone)
         # Check for nulls or empty strings in compulsory columns
         is_empty = df[compulsory_cols].isna() | (df[compulsory_cols].astype(str).apply(lambda x: x.str.strip()) == "")
         if is_empty.any().any():
-            os.remove(file_path)
+            if S3_BUCKET:
+                s3_client.delete_object(Bucket=S3_BUCKET, Key=s3_path)
+            else:
+                os.remove(file_path)
             raise HTTPException(status_code=400, detail="Validation failed. Mandatory fields (Name, Email, URL, Company, City, State, Verified By) cannot be empty.")
             
         return {"message": f"File '{file.filename}' uploaded successfully.", "rows": len(df)}
     except Exception as e:
-        if file_path.exists(): os.remove(file_path)
+        if isinstance(e, HTTPException):
+            raise e
+        if not S3_BUCKET and file_path and file_path.exists():
+            os.remove(file_path)
+        elif S3_BUCKET and s3_path:
+            try: s3_client.delete_object(Bucket=S3_BUCKET, Key=s3_path)
+            except: pass
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/results/consolidated")
 async def list_consolidated():
     """Lists all CSV files found in the attorney_profiles/consolidated directory."""
+    if S3_BUCKET:
+        resp = s3_client.list_objects_v2(Bucket=S3_BUCKET, Prefix="attorney_profiles/consolidated/")
+        files = [obj['Key'] for obj in resp.get('Contents', []) if obj['Key'].endswith('.csv')]
+        return {"files": files}
+
     files = glob.glob("attorney_profiles/consolidated/*.csv")
     files.sort(key=os.path.getmtime, reverse=True)
     return {"files": [f.replace("\\", "/") for f in files]}
@@ -154,31 +268,45 @@ class ConsolidateRequest(BaseModel):
 @app.post("/results/consolidate")
 async def consolidate_results(request: ConsolidateRequest):
     """Merges CSV files into a master file with custom naming and optional upload inclusion."""
-    folder_path = "attorney_profiles"
-    
-    # Identify Generated Files
-    generated_files = glob.glob(f"{folder_path}/**/*.csv", recursive=True)
-    generated_files = [f for f in generated_files if "uploaded" not in f.replace("\\", "/").split("/") and "consolidated" not in f.replace("\\", "/").split("/")]
-    
-    files_to_process = generated_files
-    
-    # Optionally include Uploaded Files
-    if request.include_uploaded:
-        uploaded_files = glob.glob(f"{folder_path}/uploaded/*.csv")
-        files_to_process.extend(uploaded_files)
+    files_to_process = []
+    if S3_BUCKET:
+        resp = s3_client.list_objects_v2(Bucket=S3_BUCKET, Prefix="attorney_profiles/")
+        contents = resp.get('Contents', [])
+        
+        for obj in contents:
+            key = obj['Key']
+            if not key.endswith('.csv'): continue
+            parts = key.split('/')
+            if "uploaded" not in parts and "consolidated" not in parts:
+                files_to_process.append(key)
+            elif request.include_uploaded and "uploaded" in parts:
+                files_to_process.append(key)
+    else:
+        folder_path = "attorney_profiles"
+        # Identify Generated Files
+        generated_files = glob.glob(f"{folder_path}/**/*.csv", recursive=True)
+        generated_files = [f for f in generated_files if "uploaded" not in f.replace("\\", "/").split("/") and "consolidated" not in f.replace("\\", "/").split("/")]
+        
+        files_to_process = generated_files
+        
+        # Optionally include Uploaded Files
+        if request.include_uploaded:
+            uploaded_files = glob.glob(f"{folder_path}/uploaded/*.csv")
+            files_to_process.extend(uploaded_files)
 
     if not files_to_process:
         return {"message": "No files found to consolidate."}
 
     data = []
     for f_path in files_to_process:
-        with open(f_path, encoding="utf-8", errors="ignore") as f:
-            reader = csv.reader(f)
-            file_rows = list(reader)
-            if not file_rows: continue
-            # Skip header if present (assuming 'Name' is the first column)
-            start_idx = 1 if file_rows[0] and file_rows[0][0] == "Name" else 0
-            data.extend(file_rows[start_idx:])
+        with csv_file_lock:
+            with get_file(f_path) as f:
+                reader = csv.reader(f)
+                file_rows = list(reader)
+                if not file_rows: continue
+                # Skip header if present
+                start_idx = 1 if file_rows[0] and file_rows[0][0] == "Name" else 0
+                data.extend(file_rows[start_idx:])
 
     email_set = set()
     consolidated_data = []
@@ -191,23 +319,22 @@ async def consolidate_results(request: ConsolidateRequest):
 
     header = ["Name", "Phone", "Email", "Profile URL", "Company", "City", "State", "Verified By"]
 
-    out_dir = Path("attorney_profiles/consolidated")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    
     clean_name = request.filename.replace(".csv", "") + ".csv"
-    out_path = out_dir / clean_name
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(header)
+    for row in consolidated_data:
+        row_to_write = list(row) + [""] * (len(header) - len(row))
+        writer.writerow(row_to_write[:len(header)])
 
-    with open(out_path, mode="w", encoding="utf-8", newline='') as file:
-        writer = csv.writer(file)
-        
-        # Write header first
-        writer.writerow(header)
-        
-        # Write existing rows
-        for row in consolidated_data:
-            # Ensure row length matches header
-            row_to_write = list(row) + [""] * (len(header) - len(row))
-            writer.writerow(row_to_write[:len(header)])
+    if S3_BUCKET:
+        s3_path = f"attorney_profiles/consolidated/{clean_name}"
+        s3_client.put_object(Bucket=S3_BUCKET, Key=s3_path, Body=output.getvalue().encode('utf-8'))
+    else:
+        out_dir = Path("attorney_profiles/consolidated")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        with open(out_dir / clean_name, mode="w", encoding="utf-8", newline='') as file:
+            file.write(output.getvalue())
 
         return {"message": f"Consolidated {len(files_to_process)} files into {clean_name}. Total unique leads: {len(consolidated_data)}."}
 
@@ -279,8 +406,14 @@ def run_job_logic(job_id: str, request: ScrapeRequest):
             continue
 
         # Save firms detail as script does
-        os.makedirs("Firms_details", exist_ok=True)
-        pd.DataFrame(firms).to_csv(f"Firms_details/google_places_firms_{city}_{request.state}.csv", index=False)
+        file_key = f"Firms_details/google_places_firms_{city}_{request.state}.csv"
+        if S3_BUCKET:
+            csv_buffer = io.StringIO()
+            pd.DataFrame(firms).to_csv(csv_buffer, index=False)
+            s3_client.put_object(Bucket=S3_BUCKET, Key=file_key, Body=csv_buffer.getvalue().encode('utf-8'))
+        else:
+            os.makedirs("Firms_details", exist_ok=True)
+            pd.DataFrame(firms).to_csv(file_key, index=False)
 
         for firm in firms:
             helper.firm_queue.put(firm)
@@ -363,4 +496,7 @@ async def get_active_jobs():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    if S3_BUCKET:
+        uvicorn.run(app, host="0.0.0.0", port=8000)
+    else:
+        uvicorn.run(app, host="127.0.0.1", port=8000)
