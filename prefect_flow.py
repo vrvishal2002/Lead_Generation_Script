@@ -10,6 +10,7 @@ from firm_parser import FirmParser
 from log_lib import log, get_domain_names, get_lead_profile_names
 
 S3_BUCKET = os.environ.get("S3_BUCKET_NAME")
+AWS_REGION = os.environ.get("AWS_REGION", "ap-south-1")
 
 @task(name="Scrape Firms")
 def get_firms(query, target, log_path):
@@ -49,7 +50,7 @@ def scraping_flow(state: str = "Missouri", cities: list = ["Lee's Summit"], base
 
         file_key = f"Firms_details/google_places_firms_{city}_{state}.csv"
         if S3_BUCKET:
-            s3_client = boto3.client('s3')
+            s3_client = boto3.client('s3', region_name=AWS_REGION)
             csv_buffer = io.StringIO()
             pd.DataFrame(firms).to_csv(csv_buffer, index=False)
             s3_client.put_object(Bucket=S3_BUCKET, Key=file_key, Body=csv_buffer.getvalue().encode('utf-8'))

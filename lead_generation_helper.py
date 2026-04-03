@@ -15,7 +15,8 @@ profile_file_name = "attorney_profiles_final.csv"
 name_processor_lib.log_path = log_path
 
 S3_BUCKET = os.environ.get("S3_BUCKET_NAME")
-s3_client = boto3.client('s3') if S3_BUCKET else None
+AWS_REGION = os.environ.get("AWS_REGION", "ap-south-1")
+s3_client = boto3.client('s3', region_name=AWS_REGION) if S3_BUCKET else None
 
 class LeadGenerationHelper:
 
