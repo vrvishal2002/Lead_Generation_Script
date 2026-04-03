@@ -509,7 +509,7 @@ class EmailVerifier:
                         
                         time.sleep(random.uniform(2.5, 3.5)) 
                         
-                        page_source = driver.page_source.lower()
+                        page_source = driver.page_source.lower() 
                         current_url = driver.current_url.lower()
 
                         if "couldn’t find your google account" in page_source or "couldn’t sign you in" in page_source:
