@@ -383,11 +383,16 @@ class EmailVerifier:
                 results[domain] = "unverifiable due to disconnection"
                 return None, results, itr
 
-        except (socket.timeout, smtplib.SMTPException, ssl.SSLError, socket.gaierror) as e:
-            log(f"SMTP batch error for {domain}: {e}", self.log_path)
+        except (socket.timeout, smtplib.SMTPException, ssl.SSLError, socket.gaierror, OSError) as e:
+            if isinstance(e, OSError) and e.errno == 101:
+                log(f"NETWORK ERROR for {domain}: Port 25 is unreachable. AWS typically blocks Port 25 by default. Please request AWS Support to lift this restriction.", self.log_path)
+                return None, results, itr
+            else:
+                log(f"SMTP batch error for {domain}: {e}", self.log_path)
+
             if itr < MAX_ITERATIONS:
                 results[domain] = f"error: {e}"
-                if not isinstance(e, socket.timeout):
+                if not isinstance(e, (socket.timeout, OSError)): # Only retry if not a timeout or network unreachable
                     return self.smtp_batch_check(
                         emails,
                         mx_hosts,
