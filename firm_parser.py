@@ -1,13 +1,10 @@
 from selenium.webdriver.common.by import By
-from webdriver_manager.chrome import ChromeDriverManager
-import undetected_chromedriver as uc
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import pandas as pd
 import time
-import random
 from soup_content_lib import selenium_chrome_driver
-from urllib.parse import urlparse, parse_qs, urljoin
+from urllib.parse import urlparse, urljoin
 from log_lib import log
 
 
@@ -174,4 +171,3 @@ if __name__ == "__main__":
     df = pd.DataFrame(data)
 
     df.to_csv("google_places_firms.csv", index=False)
-

@@ -3,7 +3,6 @@ import uuid
 import time
 import os
 import csv, io
-import shutil
 import boto3
 from pathlib import Path
 import glob
@@ -13,7 +12,7 @@ from fastapi import FastAPI, BackgroundTasks, HTTPException, Query, File, Upload
 from fastapi.responses import StreamingResponse
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
+from typing import List, Dict
 from lead_generation_helper import LeadGenerationHelper
 from firm_parser import FirmParser
 from log_lib import log, get_domain_names, get_lead_profile_names, csv_file_lock

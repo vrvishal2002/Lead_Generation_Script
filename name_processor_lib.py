@@ -1,6 +1,6 @@
 from wordfreq import zipf_frequency
 from names_dataset import NameDataset
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlparse
 import re
 
 log_path=None
