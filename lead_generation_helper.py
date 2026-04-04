@@ -9,7 +9,6 @@ from email_verifier import EmailVerifier, EmailFakeChecker
 from log_lib import get_log_name, log, csv_file_lock
 import name_processor_lib
 from queue import Queue
-from google.cloud import storage
 
 
 log_path = get_log_name()
@@ -19,9 +18,6 @@ name_processor_lib.log_path = log_path
 S3_BUCKET = os.environ.get("S3_BUCKET_NAME")
 AWS_REGION = os.environ.get("AWS_REGION", "ap-south-1")
 s3_client = boto3.client('s3', region_name=AWS_REGION) if S3_BUCKET else None
-GCS_BUCKET_NAME = os.environ.get("GCS_BUCKET_NAME")
-gcs_client = storage.Client() if GCS_BUCKET_NAME else None
-gcs_bucket = gcs_client.bucket(GCS_BUCKET_NAME) if GCS_BUCKET_NAME else None
 
 class LeadGenerationHelper:
 
@@ -46,7 +42,7 @@ class LeadGenerationHelper:
         if state:
             path = f"attorney_profiles/{state}"
             # Directory creation only for local runs
-            if not S3_BUCKET and not GCS_BUCKET_NAME and not os.path.exists(path):
+            if not S3_BUCKET and not os.path.exists(path):
                 os.makedirs(f"attorney_profiles/{state}")
                 print(f"Created directory: attorney_profiles/{state}")
             return f"attorney_profiles/{state}/{profile_file_name.split('.')[0]}_{city}_{state}.csv"
@@ -188,15 +184,11 @@ class LeadGenerationHelper:
                 file_path = self.get_attorney_file_name(state=profile.get("State", ""), city=profile.get("City", ""))
                 df = pd.DataFrame([profile])
 
-                if S3_BUCKET or GCS_BUCKET_NAME:
+                if S3_BUCKET:
                     existing_df = pd.DataFrame()
                     try:
-                        if S3_BUCKET:
-                            obj = s3_client.get_object(Bucket=S3_BUCKET, Key=file_path)
-                            content = obj['Body'].read()
-                        else:
-                            blob = gcs_bucket.blob(file_path)
-                            content = blob.download_as_bytes()
+                        obj = s3_client.get_object(Bucket=S3_BUCKET, Key=file_path)
+                        content = obj['Body'].read()
                             
                         if content and len(content.strip()) > 0:
                             existing_df = pd.read_csv(io.BytesIO(content))
@@ -207,10 +199,7 @@ class LeadGenerationHelper:
                     final_df = pd.concat([existing_df, df], ignore_index=True)
                     csv_buf = io.StringIO()
                     final_df.to_csv(csv_buf, index=False)
-                    if S3_BUCKET:
-                        s3_client.put_object(Bucket=S3_BUCKET, Key=file_path, Body=csv_buf.getvalue().encode('utf-8'))
-                    else:
-                        gcs_bucket.blob(file_path).upload_from_string(csv_buf.getvalue(), content_type='text/csv')
+                    s3_client.put_object(Bucket=S3_BUCKET, Key=file_path, Body=csv_buf.getvalue().encode('utf-8'))
                 else:
                     with csv_file_lock:
                         header = not os.path.exists(file_path)
