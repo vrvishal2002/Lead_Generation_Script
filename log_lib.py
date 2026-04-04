@@ -44,10 +44,20 @@ def log(message, log_path=None):
     
     if S3_BUCKET:
         try:
-            # For S3, we usually append by reading existing or just writing new log lines
-            # For efficiency in a scraper, we'll just print to console which ECS captures in CloudWatch
-            pass 
-        except: pass
+            # S3 does not support native appending. 
+            # To simulate appending, we read the existing file, append the new line, and re-upload.
+            existing_content = ""
+            try:
+                response = s3_client.get_object(Bucket=S3_BUCKET, Key=log_path)
+                existing_content = response['Body'].read().decode('utf-8')
+            except s3_client.exceptions.NoSuchKey:
+                # File doesn't exist yet, which is normal for the first log entry of a job.
+                pass
+            
+            new_content = existing_content + log_message + "\n"
+            s3_client.put_object(Bucket=S3_BUCKET, Key=log_path, Body=new_content.encode('utf-8'))
+        except Exception as e:
+            print(f"S3 Logging Error for {log_path}: {e}")
     else:
         with log_lock:
             with open(log_path, "a", encoding="utf-8") as f:
@@ -93,12 +103,13 @@ def get_domain_names():
 
     if S3_BUCKET:
         try:
-            response = s3_client.list_objects_v2(Bucket=S3_BUCKET, Prefix=f"{folder_path}/")
-            for obj in response.get('Contents', []):
-                if obj['Key'].endswith('.csv'):
-                    content = s3_client.get_object(Bucket=S3_BUCKET, Key=obj['Key'])['Body'].read().decode('utf-8')
-                    reader = csv.reader(io.StringIO(content))
-                    data.extend(list(reader))
+            paginator = s3_client.get_paginator('list_objects_v2')
+            for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=f"{folder_path}/"):
+                for obj in page.get('Contents', []):
+                    if obj['Key'].endswith('.csv'):
+                        content = s3_client.get_object(Bucket=S3_BUCKET, Key=obj['Key'])['Body'].read().decode('utf-8')
+                        reader = csv.reader(io.StringIO(content))
+                        data.extend(list(reader))
         except Exception as e:
             print(f"S3 get_domain_names error: {e}")
         domain_set = {get_domain(row[3]) for row in data if row and len(row) > 3}
