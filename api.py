@@ -113,7 +113,8 @@ async def view_result(path: str = Query(...)):
             reader = csv.reader(f)
             count = 0
             for row in reader:
-                if not row: continue
+                # Skip empty rows or rows that are just commas/whitespace
+                if not row or all(not cell.strip() for cell in row): continue
                 entry = {}
                 entry["S.No"] = 1 + count
                 row_index = 0
@@ -140,6 +141,7 @@ async def view_result(path: str = Query(...)):
             if S3_BUCKET and data:
                 output = io.StringIO()
                 writer = csv.writer(output)
+                writer.writerow(headers[1:]) # MUST write headers back
                 for row in data:
                     # Convert dict values to list, skipping S.No which is for UI only
                     writer.writerow(list(row.values())[1:])
@@ -147,6 +149,7 @@ async def view_result(path: str = Query(...)):
             elif not S3_BUCKET and data:
                 with open(path, mode="w", encoding="utf-8", newline='') as f_out:
                     writer = csv.writer(f_out)
+                    writer.writerow(headers[1:]) # MUST write headers back
                     # Write existing rows (skipping S.No added for UI)
                     for row in data:
                         writer.writerow(list(row.values())[1:])
