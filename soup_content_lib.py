@@ -33,22 +33,44 @@ selenium_driver_lock = threading.Semaphore(DRIVERS_COUNT)
 
 @contextmanager
 def selenium_chrome_driver():
-
     with selenium_driver_lock:
         time.sleep(random.uniform(0.5, 1.5))
         chrome_options = Options()
+        
+        # 1. Standard stability arguments
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         
+        # 2. The "Stealth" layer: Remove the 'automation' flag from the browser's JS
+        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+        
+        # 3. Exclude the switches that Chrome uses to announce it's a bot
+        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        chrome_options.add_experimental_option('useAutomationExtension', False)
+        
+        # 4. Force a real-looking Window size (bots often have 0x0 or weird ratios)
+        chrome_options.add_argument("--window-size=1920,1080")
+
         driver = webdriver.Remote(
             command_executor='http://13.235.23.148:4444',
             options=chrome_options
         )
-        try:
-            yield driver  # this gives control to your test code
-        finally:
-            driver.quit()  # quits automatically after the block
+        
+        # 5. Overwrite the navigator.webdriver property to 'undefined' via JS injection
+        # This is the final step to make the "Not Secure" error go away.
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+            "source": """
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined
+                })
+            """
+        })
 
+        try:
+            yield driver
+        finally:
+            driver.quit()
+            
 
 # def get_chrome_driver():
 

@@ -468,7 +468,7 @@ class EmailVerifier:
         if "email" in result and result["email"]:
             log(f"Found valid email: {result['email']} for {name} with domain {domain} in {result['iteration']} iterations", self.log_path)
             pattern = self.detect_pattern(name, result["email"])
-            if pattern and result["status"] in ("verified by smtp valid status", "verified via web browser"):
+            if pattern and ("verified by smtp valid status" in result["status"] or "verified via web browser" in result["status"]):
                 with email_pattern_lock:
                     if domain not in email_pattern_for_domain:
                         email_pattern_for_domain[domain] = [pattern]
@@ -480,7 +480,7 @@ class EmailVerifier:
             if "email" in result and result["email"]:
                 log(f"Found valid email: {result['email']} for {name} with domain {domain} in {result['iteration']} iterations with full patterns", self.log_path)
                 pattern = self.detect_pattern(name, result["email"])
-                if pattern and result["status"] in ("verified by smtp valid status", "verified via web browser"):
+                if pattern and ("verified by smtp valid status" in result["status"] or "verified via web browser" in result["status"]):
                     with email_pattern_lock:
                         if domain not in email_pattern_for_domain:
                             email_pattern_for_domain[domain] = [pattern]
@@ -502,7 +502,6 @@ class EmailVerifier:
                         wait = WebDriverWait(driver, 10)
                         log(f"Testing Google: {email} (Attempt {attempt}/4) - New Driver", self.log_path)
                         driver.get("https://accounts.google.com/signin/v2/identifier?flowName=GlifWebSignIn&flowEntry=ServiceLogin")
-                        
                         email_field = wait.until(EC.presence_of_element_located((By.NAME, "identifier")))
                         email_field.clear()
                         for char in email:
@@ -535,7 +534,7 @@ class EmailVerifier:
                 
                 if valid_count == 1:
                     log(f"{email}: ✅ RESULT: Consistently VALID (Google).", self.log_path)
-                    return {"email": email, "status": "verified via web browser", "reason": "verified via google mx server", "iteration": 0}
+                    return {"email": email, "status": "verified via web browser (Google)", "reason": "verified via google mx server", "iteration": 0}
 
         except Exception as e:
             log(f"{emails[0].split('@')[0]}: ⚠️ Google Selenium Error: {e} {traceback.format_exc()}", self.log_path)
@@ -580,7 +579,7 @@ class EmailVerifier:
                             return None
                         
                         log(f"{email}: ✅ RESULT: Consistently VALID (Microsoft Request). with IfExistsResult: {cred_res.get("IfExistsResult")})", self.log_path)
-                        return {"email": email, "status": "verified via web browser", "reason": "verified via microsoft loopup server", "iteration": 0}
+                        return {"email": email, "status": "verified via web browser (Microsoft Request)", "reason": "verified via microsoft loopup server", "iteration": 0}
                     
                     else:
                         log(f"{email}: RESULT: Account does NOT exist via request. {f"Response: {cred_res}" if cred_res["IfExistsResult"] != 1 else ""}", self.log_path)
@@ -637,7 +636,7 @@ class EmailVerifier:
                 
                 if valid_count == 4:
                     log(f"{email}: ✅ RESULT: Consistently VALID (Microsoft).", self.log_path)
-                    return {"email": email, "status": "verified via web browser", "reason": "verified via microsoft loopup server", "iteration": 0}
+                    return {"email": email, "status": "verified via web browser (Microsoft)", "reason": "verified via microsoft loopup server", "iteration": 0}
 
         except Exception as e:
             log(f"{emails[0].split('@')[0]}: ⚠️ Microsoft Selenium Error: {e} {traceback.format_exc()}", self.log_path)
@@ -682,7 +681,7 @@ class EmailVerifier:
 
                 if valid_count == 1:
                     log(f"{email}: ✅ RESULT: Consistently VALID (GoDaddy).", self.log_path)
-                    return {"email": email, "status": "verified via web browser", "reason": "verified via godaddy lookup server", "iteration": 0}
+                    return {"email": email, "status": "verified via web browser (GoDaddy)", "reason": "verified via godaddy lookup server", "iteration": 0}
 
         except Exception as e:
             log(f"{emails[0].split('@')[0]}: ⚠️ GoDaddy Selenium Error: {e} {traceback.format_exc()}", self.log_path)
