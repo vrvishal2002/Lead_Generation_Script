@@ -135,17 +135,21 @@ def close_driver():
 
 
 def get_soup(url, params=None):
-    for try_count in range(2):
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=10, params=params)
+        if r.status_code and r.text:
+            soup = BeautifulSoup(r.text, "html.parser")
+            if len(soup.find_all()) < 50 or "not a robot" in str(soup):
+                return get_rendered_soup(url)
+            return BeautifulSoup(r.text, "html.parser")
+    except Exception as e:
+        log(f"Error while fetching {url}: {e}, So trying with rendered soup", log_path)
         try:
-            r = requests.get(url, headers=HEADERS, timeout=10, params=params)
-            if r.status_code and r.text:
-                soup = BeautifulSoup(r.text, "html.parser")
-                if len(soup.find_all()) < 50 or "not a robot" in str(soup):
-                    return get_rendered_soup(url)
-                return BeautifulSoup(r.text, "html.parser")
-        except Exception as e:
-            log(f"Error in iteration {try_count} while fetching {url}: {e}", log_path)
-            
+            return get_rendered_soup(url)
+        except Exception as e2:
+            log(f"Error while fetching rendered soup for {url}: {e2}", log_path)
+            return None
+    return None
 
 
 def check_email_in_search_results(emails):

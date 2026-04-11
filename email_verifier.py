@@ -1,9 +1,10 @@
-import re, string, random, requests
+import re, string, random, requests, os
 import smtplib
 import time
 import dns.resolver
 import threading
 import socket, ssl
+import socks
 from log_lib import log
 from soup_content_lib import selenium_chrome_driver
 from selenium.webdriver.support.ui import WebDriverWait
@@ -11,6 +12,8 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
 import time, traceback, random
 
+PROXY_HOST = os.environ.get("SMTP_PROXY_HOST")
+PROXY_PORT = int(os.environ.get("SMTP_PROXY_PORT", 1080)) if os.environ.get("SMTP_PROXY_PORT") else None
 
 MAX_ITERATIONS = 4
 USER_EMAIL = "vrvishalmrf@yahoo.com"
@@ -319,26 +322,53 @@ class EmailVerifier:
 
                 time.sleep(random.uniform(0.1, 0.5))
 
-                with smtplib.SMTP(mx, 25, timeout=self.timeout) as server:
+                try:
+                    if PROXY_HOST and PROXY_PORT:
+                        # Establish connection through the SOCKS5 proxy
+                        s = socks.socksocket()
+                        s.set_proxy(socks.SOCKS5, PROXY_HOST, PROXY_PORT)
+                        s.settimeout(self.timeout)
+                        s.connect((mx, 25))
+                        
+                        server = smtplib.SMTP()
+                        server.host = mx
+                        server._host = mx  # Required for Python 3.12 STARTTLS SNI
+                        server.sock = s
+                        server.file = server.sock.makefile('rb')
+                        # Read the initial 220 greeting to synchronize the buffer
+                        server.getreply()
+                    else:
+                        server = smtplib.SMTP(mx, 25, timeout=self.timeout)
+                except Exception as e:
+                    log(f"Failed to connect to {mx} (Proxy: {bool(PROXY_HOST)}): {e}", self.log_path)
+                    return None, results, itr
+
+                try:
                     USER_DOMAIN = random.choice(VALIDATING_USER_DOMAINS)
-                    server.ehlo(USER_DOMAIN)
+                    code, _ = server.ehlo(USER_DOMAIN)
 
                     if server.has_extn("STARTTLS"):
                         server.starttls()
                         server.ehlo(USER_DOMAIN)
 
                     sender = f"admin@{[domain, USER_DOMAIN][itr % 2]}"
-
-                    server.mail(sender)
+                    code, _ = server.mail(sender)
+                    if code != 250:
+                         raise smtplib.SMTPSenderRefused(code, _, sender)
 
                     for email in remaining:
-
                         code, message = server.rcpt(email)
+
                         results[email] = code
 
                         if code in [250, 251]:
                             log(f"Email: {email} verified with code: {code} in iteration {itr}", self.log_path)
                             return [email, "verified by smtp valid status"], results, itr
+                finally:
+                    try:
+                        server.quit()
+                    except:
+                        server.close()
 
 
             unverifiable_emails = [[email, code] for email, code in results.items() if code in [421, 450, 451, 452]]
@@ -388,7 +418,8 @@ class EmailVerifier:
                 log(f"NETWORK ERROR for {domain}: Port 25 is unreachable. AWS typically blocks Port 25 by default. Please request AWS Support to lift this restriction.", self.log_path)
                 return None, results, itr
             else:
-                log(f"SMTP batch error for {domain}: {e}", self.log_path)
+                log(f"SMTP batch error for {domain}: {e} \n\n\n Trace: {traceback.format_exc()}", self.log_path)
+
 
             if itr < MAX_ITERATIONS:
                 results[domain] = f"error: {e}"
@@ -530,7 +561,7 @@ class EmailVerifier:
                             log(f"{email}: ❓ Unknown state (Attempt {attempt}).", self.log_path)
                             break
 
-                    time.sleep(random.uniform(12.5, 13.5)) 
+                    time.sleep(random.uniform(2.5, 3.5)) 
                 
                 if valid_count == 1:
                     log(f"{email}: ✅ RESULT: Consistently VALID (Google).", self.log_path)

@@ -339,7 +339,7 @@ async def consolidate_results(request: ConsolidateRequest):
         with open(out_dir / clean_name, mode="w", encoding="utf-8", newline='') as file:
             file.write(output.getvalue())
 
-        return {"message": f"Consolidated {len(files_to_process)} files into {clean_name}. Total unique leads: {len(consolidated_data)}."}
+    return {"message": f"Consolidated {len(files_to_process)} files into {clean_name}. Total unique leads: {len(consolidated_data)}."}
 
 # In-memory storage for active jobs. In production, use Redis or a DB.
 active_jobs: Dict[str, LeadGenerationHelper] = {}

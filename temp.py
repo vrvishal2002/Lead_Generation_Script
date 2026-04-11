@@ -61,6 +61,5 @@
 # print(find_spf_includes("getbc.com"))
 
 from email_verifier import EmailVerifier
-print(EmailVerifier().verify_via_web("vrvishalmrf", "gmail.com"))
-
-
+# print(EmailVerifier().get_mx_records("wasdenlawoffices.com"))
+print(EmailVerifier().verify(["vishal.vr@fourkites.com", "rahul.r@fourkites.com"]))
