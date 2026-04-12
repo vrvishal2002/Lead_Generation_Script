@@ -345,7 +345,7 @@ class EmailVerifier:
 
                 try:
                     USER_DOMAIN = random.choice(VALIDATING_USER_DOMAINS)
-                    code, _ = server.ehlo(USER_DOMAIN)
+                    code, _ = server.ehlo(USER_DOMAIN) 
 
                     if server.has_extn("STARTTLS"):
                         server.starttls()
