@@ -14,6 +14,8 @@ import time, traceback, random
 
 PROXY_HOST = os.environ.get("SMTP_PROXY_HOST")
 PROXY_PORT = int(os.environ.get("SMTP_PROXY_PORT", 1080)) if os.environ.get("SMTP_PROXY_PORT") else None
+PROXY_USER = "proxyuser"
+PROXY_PASS = "Proxyuser"
 
 MAX_ITERATIONS = 4
 USER_EMAIL = "vrvishalmrf@yahoo.com"
@@ -326,7 +328,13 @@ class EmailVerifier:
                     if PROXY_HOST and PROXY_PORT:
                         # Establish connection through the SOCKS5 proxy
                         s = socks.socksocket()
-                        s.set_proxy(socks.SOCKS5, PROXY_HOST, PROXY_PORT)
+                        s.set_proxy(
+                            socks.SOCKS5, 
+                            PROXY_HOST, 
+                            PROXY_PORT,
+                            username=PROXY_USER,
+                            password=PROXY_PASS
+                        )
                         s.settimeout(self.timeout)
                         s.connect((mx, 25))
                         
@@ -339,6 +347,9 @@ class EmailVerifier:
                         server.getreply()
                     else:
                         server = smtplib.SMTP(mx, 25, timeout=self.timeout)
+                except (socks.ProxyConnectionError, socks.GeneralProxyError) as pe:
+                    log(f"CRITICAL: Proxy at {PROXY_HOST}:{PROXY_PORT} is DOWN or REJECTING: {pe}", self.log_path)
+                    return None, results, itr
                 except Exception as e:
                     log(f"Failed to connect to {mx} (Proxy: {bool(PROXY_HOST)}): {e}", self.log_path)
                     return None, results, itr
