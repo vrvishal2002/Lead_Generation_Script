@@ -12,10 +12,11 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
 import time, traceback, random
 
-PROXY_HOST = os.environ.get("SMTP_PROXY_HOST")
-PROXY_PORT = int(os.environ.get("SMTP_PROXY_PORT", 1080)) if os.environ.get("SMTP_PROXY_PORT") else None
-PROXY_USER = "proxyuser"
-PROXY_PASS = "Proxyuser"
+# Ensure these match the user 'proxyuser' and password you created on your Ubuntu VPS
+PROXY_HOST = os.environ.get("SMTP_PROXY_HOST", "166.0.192.58")
+PROXY_PORT = int(os.environ.get("SMTP_PROXY_PORT", 1080))
+PROXY_USER = os.environ.get("SMTP_PROXY_USER", "proxyuser")
+PROXY_PASS = os.environ.get("SMTP_PROXY_PASS", "Proxyuser")
 
 MAX_ITERATIONS = 4
 USER_EMAIL = "vrvishalmrf@yahoo.com"
@@ -325,13 +326,14 @@ class EmailVerifier:
                 time.sleep(random.uniform(0.1, 0.5))
 
                 try:
-                    if PROXY_HOST and PROXY_PORT:
+                    if PROXY_HOST and PROXY_PORT and PROXY_USER and PROXY_PASS:
                         # Establish connection through the SOCKS5 proxy
                         s = socks.socksocket()
                         s.set_proxy(
                             socks.SOCKS5, 
                             PROXY_HOST, 
                             PROXY_PORT,
+                            rdns=True,
                             username=PROXY_USER,
                             password=PROXY_PASS
                         )
@@ -339,14 +341,15 @@ class EmailVerifier:
                         s.connect((mx, 25))
                         
                         server = smtplib.SMTP()
-                        server.host = mx
-                        server._host = mx  # Required for Python 3.12 STARTTLS SNI
+                        server.timeout = self.timeout
                         server.sock = s
-                        server.file = server.sock.makefile('rb')
-                        # Read the initial 220 greeting to synchronize the buffer
+                        server._host = mx  # Essential for STARTTLS SNI in Python 3.12+
+                        
+                        # Read the server's initial 220 greeting
                         server.getreply()
                     else:
-                        server = smtplib.SMTP(mx, 25, timeout=self.timeout)
+                        # server = smtplib.SMTP(mx, 25, timeout=self.timeout)
+                        pass
                 except (socks.ProxyConnectionError, socks.GeneralProxyError) as pe:
                     log(f"CRITICAL: Proxy at {PROXY_HOST}:{PROXY_PORT} is DOWN or REJECTING: {pe}", self.log_path)
                     return None, results, itr
@@ -447,6 +450,7 @@ class EmailVerifier:
     # full verification pipeline
     def verify(self, emails, itr=0):
 
+        # Ensure we check syntax before anything else
         valid_emails = self.validate_syntax(emails)
         if not valid_emails:
             log(f"email verification: {emails}, reason: bad_syntax", self.log_path)

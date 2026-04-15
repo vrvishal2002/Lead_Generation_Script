@@ -83,11 +83,11 @@ class LeadGenerationHelper:
                     log(f"Domain {domain} was previously found to have no profiles with valid emails. Skipping firm {firm_name}.", log_path)
                     continue
 
-                log(f"Checking fake email acceptance for firm {firm_name}...", log_path)
-                check_fake = fake_checker.verify_email(domain)
-                if not check_fake[0]:
-                    log(f"Domain {domain} is accepting fake emails, So will check through web for {firm_name}.", log_path)
-                    firm["accept_fake"] = True
+                # log(f"Checking fake email acceptance for firm {firm_name}...", log_path)
+                # check_fake = fake_checker.verify_email(domain)
+                # if not check_fake[0]:
+                #     log(f"Domain {domain} is accepting fake emails, So will check through web for {firm_name}.", log_path)
+                #     firm["accept_fake"] = True
 
                 profiles = scraper.scrape_firm(website)
                 log(f"Found {len(profiles)} profiles for {firm_name}", log_path)
