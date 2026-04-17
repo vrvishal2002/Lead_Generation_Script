@@ -34,6 +34,22 @@ class LeadGenerationHelper:
         self.monitor_queue = Queue(maxsize=1)
         self.domain_with_no_profiles_cache = {}
         self.domain_with_no_profiles_cache_lock = threading.Lock()
+        self.cancel_event = threading.Event()
+        self.threads = []
+        self.status = {
+            "phase": "Starting",
+            "current_city": city,
+            "total_cities": 0,
+            "cities_completed": 0,
+            "firms_discovered": 0,
+            "firms_processed": 0,
+            "firms_total": 0,
+            "firms_target": 0,
+            "profiles_found": 0,
+            "recent_leads": [],
+            "overall_progress": 0,
+            "cities": {}
+        }
 
 
 
@@ -57,10 +73,10 @@ class LeadGenerationHelper:
 
 
     def firm_worker(self):
-        fake_checker = EmailFakeChecker(log_path=log_path)
+        fake_checker = EmailFakeChecker(log_path=log_path, cancel_event=self.cancel_event)
         scraper = FirmScraper(log_path=log_path)
 
-        while True:
+        while not self.cancel_event.is_set():
             firm = self.firm_queue.get()
             if firm is None:
                 self.firm_queue.task_done()
@@ -83,11 +99,11 @@ class LeadGenerationHelper:
                     log(f"Domain {domain} was previously found to have no profiles with valid emails. Skipping firm {firm_name}.", log_path)
                     continue
 
-                # log(f"Checking fake email acceptance for firm {firm_name}...", log_path)
-                # check_fake = fake_checker.verify_email(domain)
-                # if not check_fake[0]:
-                #     log(f"Domain {domain} is accepting fake emails, So will check through web for {firm_name}.", log_path)
-                #     firm["accept_fake"] = True
+                log(f"Checking fake email acceptance for firm {firm_name}...", log_path)
+                check_fake = fake_checker.verify_email(domain)
+                if not check_fake[0]:
+                    log(f"Domain {domain} is accepting fake emails, So will check through web for {firm_name}.", log_path)
+                    firm["accept_fake"] = True
 
                 profiles = scraper.scrape_firm(website)
                 log(f"Found {len(profiles)} profiles for {firm_name}", log_path)
@@ -100,6 +116,8 @@ class LeadGenerationHelper:
                         profile["accept_fake"] = True
                     
                     self.profile_queue.put(profile)
+                
+                self.status["firms_processed"] += 1
 
             except Exception as e:
                 error_trace = traceback.format_exc()
@@ -111,9 +129,9 @@ class LeadGenerationHelper:
 
 
     def email_worker(self):
-        verifier = EmailVerifier(log_path=log_path)
+        verifier = EmailVerifier(log_path=log_path, cancel_event=self.cancel_event)
 
-        while True:
+        while not self.cancel_event.is_set():
             profile = self.profile_queue.get()
             if profile is None:
                 self.profile_queue.task_done()
@@ -164,6 +182,19 @@ class LeadGenerationHelper:
                     profile["State"] = self.state
                     profile["Verified By"] = status
                     self.result_queue.put(profile)
+                    self.status["profiles_found"] += 1
+                    
+                    # Accumulate all leads with full info for the live table preview
+                    self.status["recent_leads"].append({
+                        "Name": profile_name,
+                        "Email": email,
+                        "Firm": profile.get("Firm Name", ""),
+                        "Phone": profile.get("Phone", ""),
+                        "City": self.city,
+                        "State": self.state,
+                        "URL": profile.get("Profile URL", ""),
+                        "VerifiedBy": status
+                    })
 
                     if self.domain_with_no_profiles_cache is not None and self.domain_with_no_profiles_cache_lock is not None and profile_domain:
                         with self.domain_with_no_profiles_cache_lock:

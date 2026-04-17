@@ -53,9 +53,10 @@ ms_request_semaphore = threading.Semaphore(4)
 class EmailVerifier:
     
 
-    def __init__(self, log_path=None):
+    def __init__(self, log_path=None, cancel_event=None):
         self.timeout = 10
         self.log_path = log_path
+        self.cancel_event = cancel_event
 
 
     def clean_domain(self, domain):
@@ -304,6 +305,9 @@ class EmailVerifier:
         if results is None:
             results = {}
 
+        if self.cancel_event and self.cancel_event.is_set():
+            return None, results, itr
+
         # remove already checked emails
         remaining = [e for e in emails if e not in results]
 
@@ -413,7 +417,7 @@ class EmailVerifier:
                 return None, results, itr
 
         except smtplib.SMTPServerDisconnected as e:
-            log(f"SMTP server disconnected during batch check for {domain}: {e}. Retrying...Interation: {itr}", self.log_path)
+            log(f"SMTP server disconnected during batch check for {domain}: {e}. Retrying...Interation: {itr}, traceback: {traceback.format_exc()}", self.log_path)
             if itr < MAX_ITERATIONS:
                 return self.smtp_batch_check(
                     emails,
@@ -476,6 +480,9 @@ class EmailVerifier:
     def verify_via_web(self, name, domain):
         emails = self.generate_email_patterns(name, domain)
         if not emails:
+            return None
+
+        if self.cancel_event and self.cancel_event.is_set():
             return None
         log(f"Email verification through web: {domain}", self.log_path)
         valid_emails = self.validate_syntax(emails)
@@ -542,8 +549,10 @@ class EmailVerifier:
     def check_google_emails_selenium(self, emails):
         try:
             for email in emails:
+                if self.cancel_event and self.cancel_event.is_set(): return None
                 valid_count = 0
                 for attempt in range(1, 5):
+                    if self.cancel_event and self.cancel_event.is_set(): return None
                     with selenium_chrome_driver() as driver:
                         wait = WebDriverWait(driver, 10)
                         log(f"Testing Google: {email} (Attempt {attempt}/4) - New Driver", self.log_path)
@@ -591,6 +600,7 @@ class EmailVerifier:
     def check_outlook_emails_request(self, emails):
         try:
             for email in emails:
+                if self.cancel_event and self.cancel_event.is_set(): return None
                 domain = email.split('@')[-1]
 
                 with ms_request_semaphore:
@@ -645,8 +655,10 @@ class EmailVerifier:
         try:
             microsoft_login_url = "https://go.microsoft.com/fwlink/p/?LinkID=2125442&clcid=0x409&culture=en-us&country=us"
             for email in emails:
+                if self.cancel_event and self.cancel_event.is_set(): return None
                 valid_count = 0
                 for attempt in range(1, 5):
+                    if self.cancel_event and self.cancel_event.is_set(): return None
                     with selenium_chrome_driver() as driver:
                         wait = WebDriverWait(driver, 10)
                         log(f"Testing Microsoft: {email} (Attempt {attempt}/4) - New Driver", self.log_path)
@@ -693,8 +705,10 @@ class EmailVerifier:
         try:
             godaddy_reset_url = "https://sso.godaddy.com/account/reset?app=o365&realm=pass"
             for email in emails:
+                if self.cancel_event and self.cancel_event.is_set(): return None
                 valid_count = 0
                 attempt = 1
+                if self.cancel_event and self.cancel_event.is_set(): return None
                 with selenium_chrome_driver() as driver:
                     wait = WebDriverWait(driver, 10)
                     log(f"Testing GoDaddy: {email} (Attempt {attempt}/4) - New Driver", self.log_path)
@@ -737,8 +751,9 @@ class EmailVerifier:
 
 class EmailFakeChecker:
 
-    def __init__(self, log_path=None):
+    def __init__(self, log_path=None, cancel_event=None):
         self.log_path = log_path
+        self.cancel_event = cancel_event
 
 
     # disposable domains example
@@ -757,7 +772,7 @@ class EmailFakeChecker:
             return False, "Disposable email domain"
 
         # 3 MX check
-        mx_records = EmailVerifier(self.log_path).get_mx_records(domain)
+        mx_records = EmailVerifier(self.log_path, cancel_event=self.cancel_event).get_mx_records(domain)
         if not mx_records:
             log(f"No MX records found for {domain}", self.log_path)
             return False, "No MX records found"
@@ -766,7 +781,8 @@ class EmailFakeChecker:
 
         # 4 SMTP verification
         for _ in range(2):
-            result = EmailVerifier(self.log_path).verify([self.random_email(domain)], itr=0)
+            if self.cancel_event and self.cancel_event.is_set(): return False, "Cancelled"
+            result = EmailVerifier(self.log_path, cancel_event=self.cancel_event).verify([self.random_email(domain)], itr=0)
             log(f"Fake Email Check for {domain}: {result}", self.log_path)
             # {'uookmxtqtr@aspelllaw.com': 550}
             if result["status"] != "invalid" or "reason" in result and \

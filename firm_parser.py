@@ -14,7 +14,7 @@ class FirmParser:
         self.log_path = log_path
 
 
-    def scrape_google_places(self, query, target=50):
+    def scrape_google_places(self, query, target=50, status_callback=None, cancel_event=None):
         
         for try_count in range(2):
             try:
@@ -31,6 +31,7 @@ class FirmParser:
                     driver.get(url)
                     log(url, self.log_path)
 
+                    if cancel_event and cancel_event.is_set(): return []
                     if 'robot' in driver.page_source:
                         # wait for iframe
                         iframe = WebDriverWait(driver, 10).until(
@@ -55,7 +56,11 @@ class FirmParser:
                     page = 1
 
                     while len(results) < target:
-                        time.sleep(20)
+                        if cancel_event and cancel_event.is_set(): break
+                        # Interruptible sleep to respond to termination immediately
+                        for _ in range(20):
+                            if cancel_event and cancel_event.is_set(): break
+                            time.sleep(1)
                         log(f"\nScraping page {page}...", self.log_path)
                         last_height = driver.execute_script("return document.body.scrollHeight")
 
@@ -78,6 +83,7 @@ class FirmParser:
                         log(f"Found {len(listings)} listings.", self.log_path)
 
                         for item in listings:
+                            if cancel_event and cancel_event.is_set(): break
                             try:
                                 name = item.text.split("\n")[0].strip()
 
@@ -125,6 +131,8 @@ class FirmParser:
                                         "Firm Name": name,
                                         "Website": website
                                     })
+                                    if status_callback:
+                                        status_callback(len(results), target)
                                     log(f"{len(results)}.Collected: {name}", self.log_path)
 
                                 else:

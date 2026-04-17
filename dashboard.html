@@ -5,6 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Lead Gen Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        .spinner-anim { animation: spin 2s linear infinite; }
+        .pulse-text { animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+    </style>
 </head>
 <body class="bg-gray-50 font-sans">
     <div class="max-w-7xl mx-auto py-8 px-4">
@@ -36,7 +43,7 @@
                             <label class="block text-sm font-medium text-gray-700">Target per City</label>
                             <input type="number" id="target" name="target" value="10" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
                         </div>
-                        <button type="submit" class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 transition font-medium">
+                        <button type="submit" id="submitBtn" class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 transition font-medium">
                             Launch Scraper
                         </button>
                     </form>
@@ -60,16 +67,93 @@
             <!-- Status & Results Panel -->
             <div class="lg:col-span-2 space-y-8">
                 <!-- Active Jobs Section -->
-                <div id="activeJobsContainer" class="bg-blue-50 p-6 rounded-xl border border-blue-200 hidden">
-                    <h2 class="text-xl font-semibold text-blue-800 mb-4">Active Operations</h2>
-                    <div id="activeJobsList" class="space-y-3">
-                        <!-- Active jobs injected here -->
+                <div id="activeJobsContainer" class="bg-white p-6 rounded-xl shadow-md border-t-4 border-blue-600 hidden transition-all">
+                    <div class="flex justify-between items-center mb-6">
+                        <div>
+                            <h2 id="jobPhaseHeader" class="text-2xl font-bold text-gray-900 leading-tight">Active Operation</h2>
+                            <p id="currentStateText" class="text-sm font-semibold text-blue-600 uppercase tracking-widest">Initializing...</p>
+                        </div>
+                        <div id="sandClock" class="text-3xl text-blue-600 hidden">
+                            <i class="fa-solid fa-hourglass-half spinner-anim"></i>
+                        </div>
+                    </div>
+                    
+                    <div class="space-y-6">
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div class="bg-gray-50 p-4 rounded-lg border border-gray-100 text-center">
+                                <p class="text-[10px] text-gray-400 font-black uppercase mb-1">Total Cities</p>
+                                <p class="text-xl font-bold text-gray-800"><span id="citiesDone">0</span> / <span id="citiesTotal">0</span></p>
+                            </div>
+                            <div class="bg-gray-50 p-4 rounded-lg border border-gray-100 text-center">
+                                <p class="text-[10px] text-gray-400 font-black uppercase mb-1">Websites Scanned</p>
+                                <p id="firmsProcessedCount" class="text-xl font-bold text-blue-600">0</p>
+                            </div>
+                            <div class="bg-gray-50 p-4 rounded-lg border border-gray-100 text-center">
+                                <p class="text-[10px] text-gray-400 font-black uppercase mb-1">Total Verified Leads</p>
+                                <p id="leadsCount" class="text-xl font-bold text-green-600">0</p>
+                            </div>
+                        </div>
+
+                        <div id="cityCardsContainer" class="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-64 overflow-y-auto pr-2 border-y border-gray-100 py-4">
+                            <!-- Per-city cards will be injected here -->
+                        </div>
+
+                        <!-- Live Leads Monitor Overhaul -->
+                        <div id="liveLeadsBox" class="bg-white rounded-lg border border-gray-200 shadow-inner hidden">
+                            <div class="bg-gray-50 px-4 py-2 border-b border-gray-200 flex justify-between items-center">
+                                <h3 class="text-xs font-bold text-gray-500 uppercase tracking-wider">Live Leads Monitor</h3>
+                                <div class="flex gap-2">
+                                    <button onclick="saveJobResults()" class="text-[10px] bg-blue-100 text-blue-700 px-2 py-1 rounded hover:bg-blue-200 font-bold">Save Session</button>
+                                    <button id="liveDownloadBtn" class="text-[10px] bg-green-100 text-green-700 px-2 py-1 rounded hover:bg-green-200 font-bold">Download</button>
+                                </div>
+                            </div>
+                            <div class="max-h-96 overflow-auto border-b border-gray-100">
+                                <table class="min-w-full text-[11px]">
+                                    <thead class="bg-gray-100 sticky top-0">
+                                        <tr>
+                                            <th class="px-3 py-2 text-left whitespace-nowrap">Name</th>
+                                            <th class="px-3 py-2 text-left whitespace-nowrap">Phone</th>
+                                            <th class="px-3 py-2 text-left whitespace-nowrap">Email</th>
+                                            <th class="px-3 py-2 text-left whitespace-nowrap">Profile URL</th>
+                                            <th class="px-3 py-2 text-left whitespace-nowrap">Firm Name</th>
+                                            <th class="px-3 py-2 text-left whitespace-nowrap">City</th>
+                                            <th class="px-3 py-2 text-left whitespace-nowrap">State</th>
+                                            <th class="px-3 py-2 text-left whitespace-nowrap">Verified By</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="leadsStream" class="divide-y divide-gray-100"></tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <button onclick="cancelJob()" id="cancelBtn" class="w-full bg-red-50 text-red-600 py-3 rounded-lg hover:bg-red-100 transition font-bold border border-red-200 flex items-center justify-center gap-2">
+                            <i class="fa-solid fa-circle-stop"></i> Terminate Run
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Saved Job Results Section -->
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-xl font-semibold text-blue-900">Saved Job Results</h2>
+                        <button onclick="loadSavedFiles()" class="text-sm text-blue-600 hover:underline">Refresh</button>
+                    </div>
+                    <div class="overflow-auto max-h-60 border-t border-gray-100">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50 sticky top-0 z-10">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Saved File Name</th>
+                                    <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="savedFileList" class="bg-white divide-y divide-gray-200"></tbody>
+                        </table>
                     </div>
                 </div>
 
                 <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
                     <div class="flex justify-between items-center mb-4">
-                        <h2 class="text-xl font-semibold">Generated Files</h2>
+                        <h2 class="text-xl font-semibold">Leads Location Wise</h2>
                         <div class="flex items-center gap-4">
                             <div class="flex items-center gap-2 bg-gray-50 p-1 px-2 rounded border border-gray-200">
                                 <input type="text" id="masterFilename" placeholder="master_name" class="text-xs border-none bg-transparent focus:ring-0 w-32" value="attorney_profiles_master">
@@ -85,12 +169,6 @@
                     </div>
                     <div class="overflow-auto max-h-80 border-t border-gray-100">
                         <table class="min-w-full divide-y divide-gray-200">
-                            <thead class="bg-gray-50 sticky top-0 z-10">
-                                <tr>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">File Name</th>
-                                    <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
-                                </tr>
-                            </thead>
                             <tbody id="fileList" class="bg-white divide-y divide-gray-200">
                                 <!-- Files populated here -->
                             </tbody>
@@ -161,8 +239,16 @@
     </div>
 
     <script>
+        let activeJobId = null;
+        let statusPoller = null;
+
         document.getElementById('scrapeForm').addEventListener('submit', async (e) => {
             e.preventDefault();
+            const submitBtn = document.getElementById('submitBtn');
+            submitBtn.disabled = true;
+            submitBtn.innerText = "Job Running...";
+            submitBtn.classList.add('opacity-50', 'cursor-not-allowed');
+
             const formData = new FormData(e.target);
             const data = {
                 state: formData.get('state'),
@@ -171,15 +257,25 @@
                 target: parseInt(formData.get('target'))
             };
 
-            const res = await fetch('/jobs/start', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(data)
-            });
-            const result = await res.json();
-            alert('Job Started: ' + result.job_id);
-            loadFiles();
-            loadActiveJobs();
+            try {
+                const res = await fetch('/jobs/start', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(data)
+                });
+                const result = await res.json();
+                
+                if (res.ok) {
+                    activeJobId = result.job_id;
+                    startStatusPolling(activeJobId);
+                } else {
+                    alert(result.detail || "Failed to start job");
+                    resetSubmitButton();
+                }
+            } catch (err) {
+                alert("Connection Error");
+                resetSubmitButton();
+            }
         });
 
         document.getElementById('uploadForm').addEventListener('submit', async (e) => {
@@ -206,35 +302,194 @@
             } catch (err) { alert('Failed to connect to server'); }
         });
 
-        async function loadActiveJobs() {
-            const res = await fetch('/jobs/active');
-            const jobs = await res.json();
+        function resetSubmitButton() {
+            const submitBtn = document.getElementById('submitBtn');
+            submitBtn.disabled = false;
+            submitBtn.innerText = "Launch Scraper";
+            submitBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+        }
+
+        function startStatusPolling(jobId) {
             const container = document.getElementById('activeJobsContainer');
-            const list = document.getElementById('activeJobsList');
+            const sandClock = document.getElementById('sandClock');
+
+            // Clear previous job data from the UI to start fresh
+            document.getElementById('cityCardsContainer').innerHTML = '';
+            document.getElementById('leadsStream').innerHTML = '';
+            document.getElementById('liveLeadsBox').classList.add('hidden');
             
-            const jobIds = Object.keys(jobs);
-            if (jobIds.length === 0) {
-                container.classList.add('hidden');
-                return;
-            }
+            // Reset the Terminate button to its default active state
+            const cancelBtn = document.getElementById('cancelBtn');
+            cancelBtn.disabled = false;
+            cancelBtn.innerHTML = '<i class="fa-solid fa-circle-stop"></i> Terminate Run';
+            cancelBtn.className = "w-full bg-red-50 text-red-600 py-3 rounded-lg hover:bg-red-100 transition font-bold border border-red-200 flex items-center justify-center gap-2";
 
             container.classList.remove('hidden');
-            list.innerHTML = jobIds.map(id => {
-                const job = jobs[id];
-                return `
-                    <div class="bg-white p-3 rounded border border-blue-100 shadow-sm">
-                        <div class="flex justify-between text-sm mb-2">
-                            <span class="font-bold text-blue-700">Processing: ${job.city}, ${job.state}</span>
-                            <span class="text-gray-500 text-xs">ID: ${id.substring(0,8)}</span>
-                        </div>
-                        <div class="grid grid-cols-3 gap-2 text-xs text-center">
-                            <div class="bg-gray-50 p-1 rounded">Firms: ${job.queues.firms}</div>
-                            <div class="bg-gray-50 p-1 rounded">Profiles: ${job.queues.profiles}</div>
-                            <div class="bg-gray-50 p-1 rounded">Pending: ${job.queues.results}</div>
-                        </div>
-                    </div>
-                `;
-            }).join('');
+            sandClock.classList.remove('hidden');
+
+            if (statusPoller) clearInterval(statusPoller);
+            
+            statusPoller = setInterval(async () => {
+                try {
+                    const res = await fetch(`/jobs/${jobId}/status`);
+                    if (res.status === 404) {
+                        handleJobEnd();
+                        return;
+                    }
+                    const status = await res.json();
+                    
+                    // Update UI components
+                    document.getElementById('jobPhaseHeader').innerText = status.phase;
+                    document.getElementById('currentStateText').innerText = status.state ? `Target State: ${status.state}` : 'Processing...';
+                    
+                    document.getElementById('firmsProcessedCount').innerText = status.firms_processed;
+                    document.getElementById('leadsCount').innerText = status.profiles_found;
+                    document.getElementById('citiesDone').innerText = status.cities_completed;
+                    document.getElementById('citiesTotal').innerText = status.total_cities;
+
+                    // Update City Cards
+                    const cardsContainer = document.getElementById('cityCardsContainer');
+                    let cardsHtml = '';
+                    for (const [cityName, cityData] of Object.entries(status.cities)) {
+                        const isDone = cityData.phase === 'Done';
+                        const isProcessing = cityName === status.current_city;
+                        const statusClass = (isProcessing && !isDone) ? 'pulse-text text-blue-600' : (isDone ? 'text-green-600' : 'text-gray-400');
+                        
+                        cardsHtml += `
+                            <div class="p-3 rounded-lg border ${isProcessing ? 'border-blue-400 bg-blue-50' : 'border-gray-200 bg-white'} shadow-sm">
+                                <div class="flex justify-between items-center mb-2">
+                                    <span class="font-bold text-gray-800 text-sm">${cityName}</span>
+                                    <span class="text-[10px] font-black uppercase ${statusClass}">${cityData.phase}</span>
+                                </div>
+                                <div class="flex gap-4 text-[11px] text-gray-500 mb-2">
+                                    <span>Firms: <b class="text-gray-900">${cityData.firms_found}/${cityData.firms_target}</b></span>
+                                    <span>Leads: <b class="text-gray-900">${cityData.leads_found}</b></span>
+                                </div>
+                                <div class="w-full bg-gray-200 h-1.5 rounded-full">
+                                    <div class="h-full bg-blue-500 rounded-full transition-all" style="width: ${cityData.progress}%"></div>
+                                </div>
+                            </div>
+                        `;
+                    }
+                    cardsContainer.innerHTML = cardsHtml;
+
+                    // Update Live Leads Table
+                    const leadsBox = document.getElementById('liveLeadsBox');
+                    const stream = document.getElementById('leadsStream');
+                    if (status.recent_leads && status.recent_leads.length > 0) {
+                        leadsBox.classList.remove('hidden');
+                        stream.innerHTML = status.recent_leads.map(l => 
+                            `<tr class="hover:bg-blue-50">
+                                <td class="px-3 py-1 font-medium text-gray-900 whitespace-nowrap">${l.Name}</td>
+                                <td class="px-3 py-1 text-gray-500 whitespace-nowrap">${l.Phone || ''}</td>
+                                <td class="px-3 py-1 text-gray-500 whitespace-nowrap">${l.Email}</td>
+                                <td class="px-3 py-1 text-blue-500 truncate max-w-xs"><a href="${l.URL}" target="_blank" class="hover:underline">${l.URL || ''}</a></td>
+                                <td class="px-3 py-1 text-gray-500 whitespace-nowrap">${l.Firm || ''}</td>
+                                <td class="px-3 py-1 text-gray-400 whitespace-nowrap">${l.City}</td>
+                                <td class="px-3 py-1 text-gray-400 whitespace-nowrap">${l.State || ''}</td>
+                                <td class="px-3 py-1 text-gray-400 whitespace-nowrap">${l.VerifiedBy || ''}</td>
+                            </tr>`
+                        ).reverse().join('');
+                        
+                        // Dynamically update a mock download link for the live data
+                        const csvContent = "Name,Phone,Email,Profile URL,Firm Name,City,State,Verified By\n" + 
+                            status.recent_leads.map(l => `"${l.Name}","${l.Phone || ''}","${l.Email}","${l.URL || ''}","${l.Firm || ''}","${l.City}","${l.State || ''}","${l.VerifiedBy || ''}"`).join("\n");
+                        const blob = new Blob([csvContent], { type: 'text/csv' });
+                        document.getElementById('liveDownloadBtn').onclick = () => {
+                            const url = window.URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = `live_leads_${status.job_id.substring(0,8)}.csv`;
+                            a.click();
+                        };
+                    }
+
+                    // Handle termination/creation button states during cleanup
+                    const cancelBtn = document.getElementById('cancelBtn');
+                    if (["Completed", "Cancelled", "Error"].includes(status.phase)) {
+                        cancelBtn.disabled = true;
+                        cancelBtn.innerText = status.phase === 'Cancelled' ? 'Terminated' : 'Completed';
+                        cancelBtn.className = "w-full bg-gray-100 text-gray-400 py-3 rounded-lg font-bold border border-gray-200 flex items-center justify-center cursor-not-allowed";
+                        handleJobEnd();
+                    } else if (status.phase.includes("Terminating")) {
+                        cancelBtn.disabled = true;
+                        cancelBtn.innerHTML = '<i class="fa-solid fa-spinner spinner-anim"></i> Terminating... Please wait';
+                        cancelBtn.className = "w-full bg-red-50 text-red-400 py-3 rounded-lg font-bold border border-red-200 flex items-center justify-center gap-2 cursor-wait";
+                    } else if (status.phase.includes("Cleaning Up")) {
+                        cancelBtn.disabled = true;
+                        cancelBtn.innerHTML = '<i class="fa-solid fa-spinner spinner-anim"></i> Finishing Work...';
+                        cancelBtn.className = "w-full bg-gray-50 text-gray-400 py-3 rounded-lg font-bold border border-gray-200 flex items-center justify-center gap-2 cursor-wait";
+                    }
+                } catch (e) {
+                    console.error("Polling error", e);
+                }
+            }, 2500);
+        }
+
+        async function reconnectActiveJobs() {
+            try {
+                const res = await fetch('/jobs/active');
+                const jobs = await res.json();
+                const jobIds = Object.keys(jobs);
+                if (jobIds.length > 0) {
+                    // Reconnect to the first found active job
+                    activeJobId = jobIds[0];
+                    const submitBtn = document.getElementById('submitBtn');
+                    submitBtn.disabled = true;
+                    submitBtn.innerText = "Job Running...";
+                    submitBtn.classList.add('opacity-50', 'cursor-not-allowed');
+                    startStatusPolling(activeJobId);
+                }
+            } catch (err) {
+                console.error("Error checking for existing jobs:", err);
+            }
+        }
+
+        function handleJobEnd() {
+            clearInterval(statusPoller);
+            resetSubmitButton();
+            document.getElementById('sandClock').classList.add('hidden');
+            loadFiles();
+        }
+
+        async function saveJobResults() {
+            if(!activeJobId) return;
+            const res = await fetch(`/jobs/${activeJobId}/save`, { method: 'POST' });
+            const data = await res.json();
+            alert(data.message);
+            loadSavedFiles();
+        }
+
+        async function deleteFile(path) {
+            const password = prompt("Enter deletion password:");
+            if (!password) return;
+            const res = await fetch(`/results/delete?path=${encodeURIComponent(path)}&password=${encodeURIComponent(password)}`, { method: 'DELETE' });
+            const data = await res.json();
+            if (res.ok) {
+                alert(data.message);
+                loadFiles(); loadUploadedFiles(); loadConsolidatedFiles(); loadSavedFiles();
+            } else alert(data.detail);
+        }
+
+        async function cancelJob() {
+            if (!activeJobId) return;
+            if (!confirm("Terminate the current run? This will stop all browser instances safely.")) return;
+            
+            const cancelBtn = document.getElementById('cancelBtn');
+            cancelBtn.disabled = true;
+            cancelBtn.innerHTML = '<i class="fa-solid fa-spinner spinner-anim"></i> Initiating Termination...';
+            cancelBtn.classList.add('opacity-50', 'cursor-wait');
+
+            try {
+                const res = await fetch(`/jobs/${activeJobId}/cancel`, { method: 'POST' });
+                const result = await res.json();
+                console.log(result.message);
+            } catch (err) {
+                alert("Failed to send cancel signal");
+                cancelBtn.disabled = false;
+                cancelBtn.innerHTML = '<i class="fa-solid fa-circle-stop"></i> Terminate Run';
+                cancelBtn.classList.remove('opacity-50', 'cursor-wait');
+            }
         }
 
         async function consolidateLeads() {
@@ -251,24 +506,89 @@
             loadConsolidatedFiles();
         }
 
+        let expandedStates = new Set();
+
+        function toggleStateFolder(stateName) {
+            const rows = document.querySelectorAll(`[data-state-group="${stateName}"]`);
+            if (expandedStates.has(stateName)) {
+                expandedStates.delete(stateName);
+            } else {
+                expandedStates.add(stateName);
+            }
+            rows.forEach(row => row.classList.toggle('hidden'));
+        }
+
         async function loadFiles() {
-            const res = await fetch('/results');
-            const data = await res.json();
-            const list = document.getElementById('fileList');
-            list.innerHTML = '';
-            
-            data.files.forEach(file => {
-                const row = document.createElement('tr');
-                const escapedFile = file.replace(/'/g, "\\'");
-                row.innerHTML = `
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700">${file.split('/').pop()}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                        <button onclick="viewFile('${escapedFile}')" class="text-blue-600 hover:text-blue-900 mr-4">View</button>
-                        <a href="/results/download?path=${encodeURIComponent(file)}" class="text-green-600 hover:text-green-900">Download</a>
-                    </td>
-                `;
-                list.appendChild(row);
-            });
+            try {
+                const res = await fetch('/results');
+                const data = await res.json();
+                const list = document.getElementById('fileList');
+                list.innerHTML = '';
+                
+                for (const state in data) {
+                    const isExpanded = expandedStates.has(state);
+
+                    // State Header Row
+                    const stateRow = document.createElement('tr');
+                    stateRow.className = "bg-gray-100 cursor-pointer hover:bg-gray-200 transition-colors";
+                    stateRow.onclick = () => toggleStateFolder(state);
+                    stateRow.innerHTML = `
+                        <td colspan="2" class="px-6 py-2 text-sm font-bold text-gray-700 flex items-center gap-2">
+                            <i class="fa-solid fa-folder-open text-blue-500"></i> ${state} (${data[state].length} files)
+                        </td>
+                    `;
+                    list.appendChild(stateRow);
+
+                    // Sub-header (File Name / Actions) - only visible when expanded
+                    const subHeaderRow = document.createElement('tr');
+                    subHeaderRow.className = `${isExpanded ? '' : 'hidden'} bg-gray-50 border-l-4 border-blue-200`;
+                    subHeaderRow.setAttribute('data-state-group', state);
+                    subHeaderRow.innerHTML = `
+                        <th class="px-10 py-2 text-left text-[10px] font-bold text-gray-400 uppercase tracking-wider">File Name</th>
+                        <th class="px-6 py-2 text-right text-[10px] font-bold text-gray-400 uppercase tracking-wider">Actions</th>
+                    `;
+                    list.appendChild(subHeaderRow);
+
+                    // File Rows (Hidden by default)
+                    data[state].forEach(file => {
+                        const fileRow = document.createElement('tr');
+                        fileRow.className = `${isExpanded ? '' : 'hidden'} border-l-4 border-blue-200`;
+                        fileRow.setAttribute('data-state-group', state);
+                        const escapedFile = file.replace(/'/g, "\\'");
+                        fileRow.innerHTML = `
+                            <td class="px-10 py-3 whitespace-nowrap text-sm text-gray-600">${file.split('/').pop()}</td>
+                            <td class="px-6 py-3 whitespace-nowrap text-right text-sm font-medium">
+                                <button onclick="viewFile('${escapedFile}')" class="text-blue-600 hover:text-blue-900 mr-4">View</button>
+                                <a href="/results/download?path=${encodeURIComponent(file)}" class="text-green-600 hover:text-green-900">Download</a>
+                                <button onclick="deleteFile('${escapedFile}')" class="ml-4 text-red-400 hover:text-red-600"><i class="fa-solid fa-trash-can"></i></button>
+                            </td>
+                        `;
+                        list.appendChild(fileRow);
+                    });
+                }
+            } catch (err) { console.error("Failed to load leads:", err); }
+        }
+
+        async function loadSavedFiles() {
+            try {
+                const res = await fetch('/results/saved');
+                const data = await res.json();
+                const list = document.getElementById('savedFileList');
+                list.innerHTML = '';
+                data.files.forEach(file => {
+                    const row = document.createElement('tr');
+                    const escapedFile = file.replace(/'/g, "\\'");
+                    row.innerHTML = `
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700">${file.split('/').pop()}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                            <button onclick="viewFile('${escapedFile}')" class="text-blue-600 hover:text-blue-900 mr-4">View</button>
+                            <a href="/results/download?path=${encodeURIComponent(file)}" class="text-green-600 hover:text-green-900">Download</a>
+                            <button onclick="deleteFile('${escapedFile}')" class="ml-4 text-red-400 hover:text-red-600"><i class="fa-solid fa-trash-can"></i></button>
+                        </td>
+                    `;
+                    list.appendChild(row);
+                });
+            } catch (err) { console.error("Failed to load saved results:", err); }
         }
 
         async function loadUploadedFiles() {
@@ -285,6 +605,7 @@
                     <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                         <button onclick="viewFile('${escapedFile}')" class="text-blue-600 hover:text-blue-900 mr-4">View</button>
                         <a href="/results/download?path=${encodeURIComponent(file)}" class="text-green-600 hover:text-green-900">Download</a>
+                        <button onclick="deleteFile('${escapedFile}')" class="ml-4 text-red-400 hover:text-red-600"><i class="fa-solid fa-trash-can"></i></button>
                     </td>
                 `;
                 list.appendChild(row);
@@ -336,10 +657,12 @@
         loadFiles();
         loadUploadedFiles();
         loadConsolidatedFiles();
+        loadSavedFiles();
+        reconnectActiveJobs();
         setInterval(loadFiles, 10000); 
         setInterval(loadUploadedFiles, 15000);
         setInterval(loadConsolidatedFiles, 20000);
-        setInterval(loadActiveJobs, 3000); 
+        setInterval(loadSavedFiles, 25000);
     </script>
 </body>
 </html>
