@@ -3,6 +3,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import pandas as pd
 import time
+import random
 from soup_content_lib import selenium_chrome_driver
 from urllib.parse import urlparse, urljoin
 from log_lib import log
@@ -14,39 +15,36 @@ class FirmParser:
         self.log_path = log_path
 
 
+    def _is_captcha_page(self, driver):
+        src = driver.page_source.lower()
+        return any(k in src for k in ["captcha", "not a robot", "unusual traffic", "recaptcha", "verify you're human"])
+
     def scrape_google_places(self, query, target=50, status_callback=None, cancel_event=None):
-        
-        for try_count in range(2):
+
+        for try_count in range(4):
+            if cancel_event and cancel_event.is_set(): return []
+            # Exponential backoff between retries
+            if try_count > 0:
+                wait = random.uniform(15, 30) * try_count
+                log(f"Retry {try_count} for '{query}' — waiting {wait:.0f}s before new session", self.log_path)
+                time.sleep(wait)
+
             try:
                 with selenium_chrome_driver() as driver:
-                    time.sleep(3)
-                    driver.execute_script("""
-                    Object.defineProperty(navigator, 'webdriver', {
-                        get: () => undefined
-                    })
-                    """)
+                    # Warm up: visit google.com first to look like a real user
+                    driver.get("https://www.google.com")
+                    time.sleep(random.uniform(2.0, 4.0))
 
                     url = f"https://www.google.com/search?q={query}&tbm=lcl"
-                    log(url, self.log_path)
+                    log(f"Fetching: {url}", self.log_path)
                     driver.get(url)
-                    log(url, self.log_path)
+                    time.sleep(random.uniform(2.0, 4.0))
 
                     if cancel_event and cancel_event.is_set(): return []
-                    if 'robot' in driver.page_source:
-                        # wait for iframe
-                        iframe = WebDriverWait(driver, 10).until(
-                            EC.presence_of_element_located((By.XPATH, "//iframe[contains(@src,'recaptcha')]"))
-                        )
 
-                        driver.switch_to.frame(iframe)
-
-                        # click checkbox
-                        checkbox = WebDriverWait(driver, 10).until(
-                            EC.element_to_be_clickable((By.ID, "recaptcha-anchor"))
-                        )
-
-                        checkbox.click()
-                        driver.switch_to.default_content()
+                    if self._is_captcha_page(driver):
+                        log(f"CAPTCHA detected on try {try_count + 1} — will retry with fresh session", self.log_path)
+                        continue  # exits the `with` block, quits driver, retries loop
 
                     wait = WebDriverWait(driver, 20)
 
@@ -54,11 +52,16 @@ class FirmParser:
                     seen_names = set()
                     visited_websites = set()
                     page = 1
+                    captcha_hit = False
 
                     while len(results) < target:
                         if cancel_event and cancel_event.is_set(): break
-                        # Interruptible sleep to respond to termination immediately
-                        for _ in range(20):
+                        if self._is_captcha_page(driver):
+                            log(f"CAPTCHA appeared mid-session on page {page} — will retry", self.log_path)
+                            captcha_hit = True
+                            break
+                        # Interruptible human-paced delay between pages
+                        for _ in range(int(random.uniform(8, 15))):
                             if cancel_event and cancel_event.is_set(): break
                             time.sleep(1)
                         log(f"\nScraping page {page}...", self.log_path)
@@ -157,9 +160,14 @@ class FirmParser:
                         except:
                             log("\nNo more pages available.", self.log_path)
                             break
+                    if captcha_hit:
+                        continue  # retry outer loop with fresh driver
                     return results
             except Exception as e:
                 log(f"Error While executing '{query}' in web browser: {e}", self.log_path)
+
+        log(f"All retries exhausted for '{query}'", self.log_path)
+        return []
 
         # finally:
         #     if driver:
