@@ -1,20 +1,28 @@
 #!/bin/bash
-# Selenium Grid 4 — GCP VM startup script
+# Selenium Grid 4 — Azure VM startup script
 #
-# Run once after SSH-ing into your GCP VM:
-#   chmod +x start-selenium-grid.sh
-#   ./start-selenium-grid.sh [chrome_nodes]     # default: 3 nodes
+# Run once after SSH-ing into your Azure VM:
+#   chmod +x start-selenium-grid-azure.sh
+#   ./start-selenium-grid-azure.sh [chrome_nodes]     # default: 3 nodes
 #
 # Scale nodes later without downtime:
 #   docker compose -f selenium-grid.yml up --scale chrome=6 -d
 #
 # Verify grid is healthy:
 #   curl http://localhost:4444/status | python3 -m json.tool
-#   Open http://<GCP_VM_EXTERNAL_IP>:4444/ui  in a browser
+#   Open http://<AZURE_VM_PUBLIC_IP>:4444/ui  in a browser
 
 set -e
 
-CHROME_NODES=${1:-3}   # pass a number as first arg to override
+CHROME_NODES=${1:-3}
+
+# Azure Instance Metadata Service (IMDS) — requires the Metadata:true header
+_get_public_ip() {
+    curl -sf \
+        -H "Metadata:true" \
+        "http://169.254.169.254/metadata/instance/network/interface/0/ipv4/ipAddress/0/publicIpAddress?api-version=2021-02-01&format=text" \
+        2>/dev/null || hostname -I | awk '{print $1}'
+}
 
 echo "==> Stopping any existing Selenium Grid containers..."
 docker compose -f selenium-grid.yml down 2>/dev/null || true
@@ -28,9 +36,9 @@ services:
     image: selenium/hub:4.27.0
     container_name: selenium-hub
     ports:
-      - "4444:4444"   # WebDriver / Grid UI
-      - "4442:4442"   # Event bus publish
-      - "4443:4443"   # Event bus subscribe
+      - "4444:4444"
+      - "4442:4442"
+      - "4443:4443"
     environment:
       - SE_SESSION_RETRY_INTERVAL=5
       - SE_SESSION_REQUEST_TIMEOUT=300
@@ -44,7 +52,7 @@ services:
 
   chrome:
     image: selenium/node-chrome:4.27.0
-    shm_size: "2gb"          # prevent Chrome /dev/shm OOM inside Docker
+    shm_size: "2gb"
     depends_on:
       selenium-hub:
         condition: service_healthy
@@ -69,13 +77,18 @@ done
 echo "==> Starting ${CHROME_NODES} Chrome node(s)..."
 docker compose -f selenium-grid.yml up -d --scale chrome="${CHROME_NODES}" chrome
 
+PUBLIC_IP=$(_get_public_ip)
+
 echo ""
-echo "✓ Selenium Grid 4 is running."
-echo "  Hub UI  : http://$(curl -sf http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip -H 'Metadata-Flavor: Google' 2>/dev/null || hostname -I | awk '{print $1}'):4444/ui"
+echo "Selenium Grid 4 is running."
+echo "  Hub UI  : http://${PUBLIC_IP}:4444/ui"
 echo "  Status  : curl http://localhost:4444/status"
 echo ""
 echo "  Set this env var in your app:"
-echo "  SELENIUM_HUB_URL=http://<GCP_VM_EXTERNAL_IP>:4444"
+echo "  SELENIUM_HUB_URL=http://${PUBLIC_IP}:4444"
+echo ""
+echo "  NOTE: Open port 4444 in your Azure VM Network Security Group (NSG)"
+echo "        if you need to access the Hub UI from outside the VM."
 echo ""
 echo "  To scale nodes:  docker compose -f selenium-grid.yml up --scale chrome=6 -d"
 echo "  To stop all   :  docker compose -f selenium-grid.yml down"

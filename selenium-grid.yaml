@@ -20,7 +20,7 @@ spec:
     spec:
       containers:
       - name: selenium-hub
-        image: selenium/hub:latest
+        image: selenium/hub:4.27.0
         resources:
           limits:
             memory: "512Mi"
@@ -29,7 +29,12 @@ spec:
             memory: "256Mi"
             cpu: "250m"
         ports:
+        - containerPort: 4442
+        - containerPort: 4443
         - containerPort: 4444
+        env:
+        - name: SE_GRID_URL
+          value: "http://52.139.236.109:4444"
 ---
 apiVersion: v1
 kind: Service
@@ -37,13 +42,19 @@ metadata:
   name: selenium-hub
   namespace: selenium
 spec:
-  type: NodePort
+  type: LoadBalancer
   selector:
     app: selenium-hub
   ports:
-    - port: 4444
+    - name: web
+      port: 4444
       targetPort: 4444
-      nodePort: 30007
+    - name: publish
+      port: 4442
+      targetPort: 4442
+    - name: subscribe
+      port: 4443
+      targetPort: 4443
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -51,7 +62,7 @@ metadata:
   name: chrome-node
   namespace: selenium
 spec:
-  replicas: 1  # Only 1 Chrome node
+  replicas: 6
   selector:
     matchLabels:
       app: chrome-node
@@ -62,14 +73,17 @@ spec:
     spec:
       containers:
       - name: chrome-node
-        image: selenium/node-chrome:latest
+        image: selenium/node-chrome:4.27.0
         resources:
           limits:
-            memory: "512Mi"
+            memory: "1Gi"
             cpu: "500m"
           requests:
-            memory: "256Mi"
+            memory: "512Mi"
             cpu: "250m"
+        volumeMounts:
+        - mountPath: /dev/shm
+          name: dshm
         env:
         - name: SE_EVENT_BUS_HOST
           value: selenium-hub
@@ -77,3 +91,12 @@ spec:
           value: "4442"
         - name: SE_EVENT_BUS_SUBSCRIBE_PORT
           value: "4443"
+        - name: SE_NODE_MAX_SESSIONS
+          value: "1"
+        - name: SE_NODE_SESSION_TIMEOUT
+          value: "300"
+      volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 1Gi

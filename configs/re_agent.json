@@ -1,0 +1,66 @@
+{
+    "id": "re_agent",
+    "name": "Real Estate Agent",
+    "folder_name": "re_agent_profiles",
+    "file_prefix": "agent",
+    "default_query": "real estate agent directory list contact in",
+    "directory_keywords": [
+        "agents",
+        "realtors",
+        "brokers",
+        "team",
+        "staff",
+        "our-team",
+        "directory",
+        "professionals",
+        "find-an-agent"
+    ],
+    "profile_required_keywords": [
+        "agent",
+        "realtor",
+        "broker",
+        "real estate",
+        "licensed",
+        "listings",
+        "property"
+    ],
+    "lead_role_keywords": [
+        "Real Estate Agent",
+        "Realtor",
+        "Broker",
+        "Associate Broker",
+        "Sales Agent",
+        "Licensed Agent",
+        "Team Leader Real Estate",
+        "Real Estate Professional",
+        "Agent Associate"
+    ],
+    "slug_exclusion_keywords": [
+        "blog",
+        "news",
+        "careers",
+        "jobs",
+        "hiring",
+        "app",
+        "login",
+        "signup",
+        "forum",
+        "events",
+        "press",
+        "media",
+        "support",
+        "properties",
+        "listing",
+        "search-results"
+    ],
+    "disposable_exclusion": [
+        "tempmail.com",
+        "mailinator.com",
+        "guerrillamail.com",
+        "yopmail.com",
+        "anonaddy.com",
+        "10minutemail.com",
+        "getnada.com",
+        "moakt.com"
+    ]
+}

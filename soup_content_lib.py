@@ -15,8 +15,7 @@ import threading
 
 from log_lib import log
 
-SELENIUM_HUB_URL = os.environ.get("SELENIUM_HUB_URL", "http://localhost:4444")
-
+SELENIUM_HUB_URL = os.environ.get("SELENIUM_HUB_URL", "http://52.139.236.109:4444")
 
 # =====================================================
 # BASIC FETCH
@@ -63,6 +62,9 @@ def _apply_stealth(driver, ua: str):
             "sec-ch-ua": brand_list,
             "sec-ch-ua-mobile": "?0",
             "sec-ch-ua-platform": '"Windows"',
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "same-origin",
         }})
     except Exception:
         pass
@@ -275,8 +277,29 @@ def selenium_chrome_driver():
 
         try:
             # Warmup on google.com — establishes cookies + looks like a returning user
-            driver.get("https://www.google.com")
+            # Simulate coming from a different source or direct entry
+            driver.get("https://www.google.com/")
             time.sleep(random.uniform(2.5, 5.0))
+            
+            # Human-like interaction: Type into the search box even if we go to a URL directly later
+            try:
+                search_box = driver.find_element(By.NAME, "q")
+                for char in "google maps":
+                    search_box.send_keys(char)
+                    time.sleep(random.uniform(0.1, 0.3))
+            except: pass
+
+            # Handle initial warmup CAPTCHA if triggered by Cloud IP
+            if 'not a robot' in driver.page_source.lower():
+                try:
+                    iframes = driver.find_elements(By.XPATH, "//iframe[contains(@src,'recaptcha')]")
+                    if iframes:
+                        driver.switch_to.frame(iframes[0])
+                        checkbox = driver.find_element(By.ID, "recaptcha-anchor")
+                        checkbox.click()
+                        driver.switch_to.default_content()
+                        time.sleep(random.uniform(3.0, 5.0))
+                except: pass
 
             # Reload with stored cookies from a previous session in this process
             if _load_google_cookies(driver):

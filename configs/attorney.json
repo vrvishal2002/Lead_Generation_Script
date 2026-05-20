@@ -1,0 +1,63 @@
+{
+    "id": "attorney",
+    "name": "Attorney Leads",
+    "folder_name": "attorney_profiles",
+    "file_prefix": "attorney",
+    "default_query": "medical malpractice and personal injury lawyers",
+    "directory_keywords": [
+        "attorneys",
+        "our-team",
+        "team",
+        "legal-team",
+        "lawyers",
+        "meet",
+        "profiles",
+        "about",
+        "people",
+        "paralegals",
+        "advocates"
+    ],
+    "profile_required_keywords": [
+        "personal injury",
+        "medical malpractice",
+        "medical negligence",
+        "wrongful death",
+        "accident",
+        "dog bite",
+        "drug"
+    ],
+    "lead_role_keywords": [
+        "associate",
+        "attorney",
+        "advocate",
+        "lawyer",
+        "partner",
+        "paralegal",
+        "legal",
+        "esq",
+        "of counsel",
+        "senior",
+        "principal"
+    ],
+    "slug_exclusion_keywords": [
+        "attorney",
+        "lawyer",
+        "profile",
+        "legal"
+    ],
+    "disposable_exclusion": [
+        "mailinator.com",
+        "tempmail.com",
+        "10minutemail.com",
+        "guerrillamail.com",
+        "protectingpatientrights.com",
+        "cellinolaw.com",
+        "cartermario.com",
+        "brandonjbroderick.com",
+        "carmodylaw.com",
+        "danaherlagnese.com",
+        "brownandcrouppen.com",
+        "devaultlaw.com",
+        "www.devaultlaw.com"
+    ]
+}

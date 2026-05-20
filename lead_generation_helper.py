@@ -3,7 +3,7 @@ import traceback
 import threading
 import time
 from urllib.parse import urlparse
-import boto3
+import storage_lib
 from firm_scraper import FirmScraper
 from email_verifier import EmailVerifier, EmailFakeChecker
 from log_lib import get_log_name, log, csv_file_lock
@@ -12,17 +12,41 @@ from queue import Queue
 
 
 log_path = get_log_name()
-profile_file_name = "attorney_profiles_final.csv"
 name_processor_lib.log_path = log_path
-
-S3_BUCKET = os.environ.get("S3_BUCKET_NAME")
-AWS_REGION = os.environ.get("AWS_REGION", "ap-south-1")
-s3_client = boto3.client('s3', region_name=AWS_REGION) if S3_BUCKET else None
 
 class LeadGenerationHelper:
 
-    def __init__(self, city="", state=""):
+    def __init__(self, city="", state="", config=None):
         self.log_path = log_path
+        self.config = config or {
+            "id": "attorney",
+            "name": "Attorney Leads",
+            "folder_name": "attorney_profiles",
+            "file_prefix": "attorney",
+            "default_query": "medical malpractice and personal injury lawyers in",
+            "directory_keywords": [
+                "attorneys", "our-team", "team", "legal-team", "lawyers", "meet",
+                "profiles", "about", "people", "paralegals", "advocates"
+            ],
+            "profile_required_keywords": [
+                "personal injury", "medical malpractice", "medical negligence",
+                "wrongful death", "accident", "dog bite", "drug"
+            ],
+            "lead_role_keywords": [
+                "associate", "attorney", "advocate", "lawyer", "partner",
+                "paralegal", "legal", "esq", "of counsel", "senior", "principal"
+            ],
+            "slug_exclusion_keywords": [
+                "attorney", "lawyer", "profile", "legal", "contact",
+                "disclaimer", "privacy", "blog", "news"
+            ],
+            "disposable_exclusion": [
+                "mailinator.com", "tempmail.com", "10minutemail.com", "guerrillamail.com",
+                "protectingpatientrights.com", "cellinolaw.com", "cartermario.com",
+                "brandonjbroderick.com", "carmodylaw.com", "danaherlagnese.com",
+                "brownandcrouppen.com", "devaultlaw.com", "www.devaultlaw.com"
+            ]
+        }
         self.gathered_domain_names = set()
         self.gathered_profile_names = set()
         self.domains_with_no_leads = set()
@@ -52,17 +76,15 @@ class LeadGenerationHelper:
         }
 
 
-
-    @staticmethod
-    def get_attorney_file_name(state="", city=""):
+    def get_file_name(self, state="", city=""):
+        folder = self.config.get("folder_name", "attorney_profiles")
+        prefix = self.config.get("file_prefix", "attorney")
         if state:
-            path = f"attorney_profiles/{state}"
-            # Directory creation only for local runs
-            if not S3_BUCKET and not os.path.exists(path):
-                os.makedirs(f"attorney_profiles/{state}")
-                print(f"Created directory: attorney_profiles/{state}")
-            return f"attorney_profiles/{state}/{profile_file_name.split('.')[0]}_{city}_{state}.csv"
-        return f"attorney_profiles/{profile_file_name.split('.')[0]}_{city}_{state}.csv"
+            # In local mode, ensure the state sub-directory exists
+            if not storage_lib.is_cloud():
+                os.makedirs(f"{folder}/{state}", exist_ok=True)
+            return f"{folder}/{state}/{prefix}_profiles_{city}_{state}.csv"
+        return f"{folder}/{prefix}_profiles_{city}_{state}.csv"
 
 
     @staticmethod
@@ -73,8 +95,9 @@ class LeadGenerationHelper:
 
 
     def firm_worker(self):
-        fake_checker = EmailFakeChecker(log_path=log_path, cancel_event=self.cancel_event)
-        scraper = FirmScraper(log_path=log_path)
+        extra_exclusion = self.config.get("disposable_exclusion", [])
+        fake_checker = EmailFakeChecker(log_path=log_path, cancel_event=self.cancel_event, extra_disposable=extra_exclusion)
+        scraper = FirmScraper(log_path=self.log_path, config=self.config)
 
         while not self.cancel_event.is_set():
             firm = self.firm_queue.get()
@@ -105,18 +128,14 @@ class LeadGenerationHelper:
                     log(f"Domain {domain} is accepting fake emails, So will check through web for {firm_name}.", log_path)
                     firm["accept_fake"] = True
 
-                profiles = scraper.scrape_firm(website)
+                profiles = scraper.scrape_firm(website, firm_name=firm_name)
                 log(f"Found {len(profiles)} profiles for {firm_name}", log_path)
 
                 for profile in profiles:
                     profile["Firm Name"] = firm_name
-                    if "accept_fake" not in firm:
-                        profile["accept_fake"] = False
-                    else: 
-                        profile["accept_fake"] = True
-                    
+                    profile["accept_fake"] = firm.get("accept_fake", False)
                     self.profile_queue.put(profile)
-                
+
                 self.status["firms_processed"] += 1
 
             except Exception as e:
@@ -165,14 +184,10 @@ class LeadGenerationHelper:
                             break
 
                 if not email and profile_name and profile_domain:
-                    if profile['accept_fake']:
-                        email_result = verifier.verify_via_web(profile_name, profile_domain)
-                    else:
-                        email_result = verifier.get_valid_email(profile_name, profile_domain)
+                    email_result = verifier.verify_via_web(profile_name, profile_domain)
                     if email_result:
                         email = email_result[0]
                         status = email_result[1]
-                    
 
                 if email:
                     del profile["accept_fake"]
@@ -183,8 +198,7 @@ class LeadGenerationHelper:
                     profile["Verified By"] = status
                     self.result_queue.put(profile)
                     self.status["profiles_found"] += 1
-                    
-                    # Accumulate all leads with full info for the live table preview
+
                     self.status["recent_leads"].append({
                         "Name": profile_name,
                         "Email": email,
@@ -212,25 +226,27 @@ class LeadGenerationHelper:
             profile = self.result_queue.get()
 
             try:
-                file_path = self.get_attorney_file_name(state=profile.get("State", ""), city=profile.get("City", ""))
+                if profile is None:
+                    break
+
+                file_path = self.get_file_name(state=profile.get("State", ""), city=profile.get("City", ""))
                 df = pd.DataFrame([profile])
 
-                if S3_BUCKET:
+                if storage_lib.is_cloud():
+                    # Read-modify-write so concurrent workers don't clobber each other
                     existing_df = pd.DataFrame()
                     try:
-                        obj = s3_client.get_object(Bucket=S3_BUCKET, Key=file_path)
-                        content = obj['Body'].read()
-                            
+                        content = storage_lib.read_file(file_path)
                         if content and len(content.strip()) > 0:
                             existing_df = pd.read_csv(io.BytesIO(content))
-                            existing_df = existing_df.dropna(how='all') # Remove phantom empty rows
-                    except Exception:
+                            existing_df = existing_df.dropna(how="all")
+                    except FileNotFoundError:
                         pass
-                    
+
                     final_df = pd.concat([existing_df, df], ignore_index=True)
                     csv_buf = io.StringIO()
                     final_df.to_csv(csv_buf, index=False)
-                    s3_client.put_object(Bucket=S3_BUCKET, Key=file_path, Body=csv_buf.getvalue().encode('utf-8'))
+                    storage_lib.write_file(file_path, csv_buf.getvalue())
                 else:
                     with csv_file_lock:
                         header = not os.path.exists(file_path)
@@ -245,7 +261,6 @@ class LeadGenerationHelper:
 
     def monitor(self):
         while True:
-            # Check if we should stop
             if not self.monitor_queue.empty():
                 val = self.monitor_queue.get()
                 if val is None:

@@ -1,0 +1,121 @@
+# Azure Kubernetes Service (AKS) manifest for the Lead Generation API
+#
+# ── Prerequisites ─────────────────────────────────────────────────────────────
+# 1. Create an Azure Container Registry (ACR):
+#      az acr create --name <ACR_NAME> --resource-group <RG> --sku Basic
+#
+# 2. Build & push the image:
+#      az acr build --registry <ACR_NAME> --image lead-gen-api:latest .
+#
+# 3. Attach ACR to AKS so it can pull images:
+#      az aks update --name <AKS_CLUSTER> --resource-group <RG> --attach-acr <ACR_NAME>
+#
+# 4. Fill in the placeholder values below, then apply:
+#      kubectl apply -f azure-app.yaml
+#
+# ── Updating a running deployment ─────────────────────────────────────────────
+#   az acr build --registry <ACR_NAME> --image lead-gen-api:latest .
+#   kubectl rollout restart deployment/lead-gen-api -n lead-gen
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: lead-gen
+
+---
+# Store sensitive values as a Secret — fill these in before applying.
+# Alternatively manage them via Azure Key Vault + the Secrets Store CSI driver.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: lead-gen-secrets
+  namespace: lead-gen
+type: Opaque
+stringData:
+  AZURE_STORAGE_CONNECTION_STRING: "<your-azure-storage-connection-string>"
+  AZURE_CONTAINER_NAME: "lead-gen-api"
+  GOOGLE_API_KEY: "<your-google-api-key>"
+  SELENIUM_HUB_URL: "http://selenium-hub.selenium.svc.cluster.local:4444"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lead-gen-api
+  namespace: lead-gen
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lead-gen-api
+  template:
+    metadata:
+      labels:
+        app: lead-gen-api
+    spec:
+      containers:
+      - name: lead-gen-api
+        image: azleadgenacr.azurecr.io/lead-gen-api:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+        env:
+        - name: AZURE_STORAGE_CONNECTION_STRING
+          valueFrom:
+            secretKeyRef:
+              name: lead-gen-secrets
+              key: AZURE_STORAGE_CONNECTION_STRING
+        - name: AZURE_CONTAINER_NAME
+          valueFrom:
+            secretKeyRef:
+              name: lead-gen-secrets
+              key: AZURE_CONTAINER_NAME
+        - name: GOOGLE_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: lead-gen-secrets
+              key: GOOGLE_API_KEY
+        - name: SELENIUM_HUB_URL
+          valueFrom:
+            secretKeyRef:
+              name: lead-gen-secrets
+              key: SELENIUM_HUB_URL
+        - name: SELENIUM_DRIVERS_COUNT
+          value: "6"
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "500m"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 15
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 30
+
+---
+# LoadBalancer assigns a public Azure IP — switch to ClusterIP + Ingress
+# if you want TLS termination or a custom domain.
+apiVersion: v1
+kind: Service
+metadata:
+  name: lead-gen-api
+  namespace: lead-gen
+spec:
+  type: LoadBalancer
+  selector:
+    app: lead-gen-api
+  ports:
+  - port: 80
+    targetPort: 8000

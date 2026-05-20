@@ -26,7 +26,7 @@ def process_firm(firm):
     log("", log_path)
     log(firm, log_path)
 
-    profiles = FirmScraper(log_path=log_path).scrape_firm(firm["Website"])
+    profiles = FirmScraper(log_path=log_path).scrape_firm(firm["Website"], firm_name=firm["Firm Name"])
     log(f"Found {len(profiles)} Profiles for {firm['Firm Name']}", log_path)
 
     count_removed = 0
@@ -103,7 +103,7 @@ if __name__ == "__main__":
         log("Previous Attorney File deleted successfully.", log_path)
 
     # Define your column names
-    headers = ['Name', 'Phone', 'Email', 'Profile URL']
+    headers = ['Name', 'Phone', 'Email', 'Profile URL', 'Firm Name']
 
     with open(profile_file_name, mode='w', newline='', encoding='utf-8') as file:
         writer = csv.writer(file)
@@ -126,5 +126,3 @@ if __name__ == "__main__":
 
 
         
-
-

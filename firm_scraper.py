@@ -8,19 +8,20 @@ from log_lib import log
 
 class FirmScraper:
 
-    def __init__(self, log_path=None):
+    def __init__(self, log_path=None, config=None):
         self.log_path = log_path
+        self.config = config
 
 
-    def scrape_firm(self, home_url):
+    def scrape_firm(self, home_url, firm_name=""):
         log(f"Collecting directory candidates... for {home_url}", self.log_path)
-        candidates = DirectoryProcessingHelper(log_path=self.log_path).collect_directory_candidates(home_url)
+        candidates = DirectoryProcessingHelper(log_path=self.log_path, config=self.config).collect_directory_candidates(home_url)
 
         log(f"\nPossible directory URLs for {home_url} :", self.log_path)
         for c in candidates:
             log(c, self.log_path)
 
-        directory_url = DirectoryProcessingHelper(log_path=self.log_path).select_best_directory(candidates, home_url)
+        directory_url = DirectoryProcessingHelper(log_path=self.log_path, config=self.config).select_best_directory(candidates, home_url)
 
         if not directory_url:
             log(f"\nNo valid directory found for {home_url}. So going with home URL", self.log_path)
@@ -28,17 +29,17 @@ class FirmScraper:
 
         log(f"\n{home_url} : Selected Directory:{directory_url}", self.log_path)
 
-        profile_links = ProfileProcessingHelper(log_path=self.log_path).extract_profile_links(directory_url, home_url)
+        profile_links = ProfileProcessingHelper(log_path=self.log_path, config=self.config).extract_profile_links(directory_url, home_url)
         log(f"\n{directory_url} : Profiles Found: {len(profile_links)}", self.log_path)
 
         if not profile_links:
-            profile_links = ProfileProcessingHelper(log_path=self.log_path).extract_profile_links(home_url, home_url)
+            profile_links = ProfileProcessingHelper(log_path=self.log_path, config=self.config).extract_profile_links(home_url, home_url)
             log(f"\n{home_url} : Profiles Found in Directory: {len(profile_links)}", self.log_path)
 
         if not profile_links:
             soup = soup_content_lib.get_soup(directory_url)
             if soup:
-                profiles = ProfileProcessingHelper(log_path=self.log_path).extract_team_profiles(soup, directory_url)
+                profiles = ProfileProcessingHelper(log_path=self.log_path, config=self.config).extract_team_profiles(soup, directory_url, firm_name=firm_name)
                 if profiles:
                     log(f'\n{directory_url} : Profiles Found in Team: {len(profiles)}: {profiles}', self.log_path)
                 return profiles
@@ -52,7 +53,7 @@ class FirmScraper:
         results = []
         for link in profile_links:
             log(f"Extracting: {link}", self.log_path)
-            data = ProfileProcessingHelper(log_path=self.log_path).extract_profile(link)
+            data = ProfileProcessingHelper(log_path=self.log_path, config=self.config).extract_profile(link, firm_name=firm_name)
             if data:
                 results.append(data)
 

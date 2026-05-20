@@ -5,19 +5,6 @@ import re
 
 log_path=None
 nd = NameDataset()
-DIRECTORY_KEYWORDS = [
-    "attorneys",
-    "our-team",
-    "team",
-    "legal-team",
-    "lawyers",
-    "meet",
-    "profiles",
-    "about",
-    "people",
-    "paralegals",
-    "advocates"
-]
 
 
 def is_strong_name_word(word):
@@ -59,7 +46,7 @@ def is_strong_name_word(word):
     return False
 
 
-def is_valid_attorney_slug(word):
+def is_valid_lead_slug(word, blacklist=None):
     occurance = nd.search(word)
     if (occurance["first_name"] is not None and \
         "United States" in occurance["first_name"]["rank"] and \
@@ -77,7 +64,7 @@ def is_valid_attorney_slug(word):
         return True
 
     word_clean = word.strip().lower()
-    if any(keyword in word_clean for keyword in ["contact", "team", "help", "info", "support", "service", "mail", "admin", "office", "attorney", "lawyer", "legal"]):
+    if any(keyword in word_clean for keyword in ["contact", "help", "info", "support", "service", "mail", "admin", "office"]):
         return False
 
     # Reject very common English words
@@ -93,7 +80,7 @@ def path_depth(url):
         return 0
     return len(path.split("/"))
 
-def is_profile_slug(url, is_profil_check=True):
+def is_profile_slug(url, is_profil_check=True, blacklist=None):
     path = urlparse(url).path.strip("/")
     if not path:
         return False
@@ -104,15 +91,14 @@ def is_profile_slug(url, is_profil_check=True):
         slug =" ".join(path.split('/')[-2].split('-'))
 
     if is_profil_check:
-        slug = normalize_name(slug)
+        slug = normalize_name(slug, blacklist)
 
     words = slug.split()
 
     if not (2 <= len(words) <= 4):
         return False
 
-    blacklist = DIRECTORY_KEYWORDS
-    if any(w.lower() in blacklist for w in words):
+    if blacklist and any(w.lower() in blacklist for w in words):
         return False
 
     for w in words:
@@ -122,8 +108,8 @@ def is_profile_slug(url, is_profil_check=True):
     return True
 
 
-def looks_like_name(text):
-    text = normalize_name(text)
+def looks_like_name(text, exclusions=None):
+    text = normalize_name(text, exclusions)
     if not text:
         return False
     words = text.lower().replace(",", "").split()
@@ -151,7 +137,7 @@ def looks_like_name(text):
     return True
 
 
-def normalize_name(name):
+def normalize_name(name, exclusions=None):
     # Lowercase
     name = name.lower().replace("/", " ").replace("\\", " ").replace('-', ' ').replace('_', ' ').strip()
 
@@ -176,13 +162,14 @@ def normalize_name(name):
         name = name.replace(".cgi", "")
     if name.endswith(".pl"):
         name = name.replace(".pl", "")
-    if name.endswith(".inc"):
-        name = name.replace(".inc", "")
-    if name.endswith(".incx"):
-        name = name.replace(".incx", "")
-    name = name.replace("attorney", "", 1)
-    name = name.replace("lawyer", "", 1)
-    name = name.replace("profile", "", 1)
+    # Industry-agnostic noise removal
+    for noise in ["inc", "incx", "profile"]:
+        name = name.replace(noise, "", 1)
+
+    if exclusions:
+        for word in exclusions:
+            name = name.replace(word.lower(), "", 1)
+
     name = name.replace("%2C", "", 1)
 
     name = re.sub(r"[-_.]", " ", name)

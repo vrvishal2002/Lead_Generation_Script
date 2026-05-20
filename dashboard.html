@@ -15,10 +15,28 @@
 </head>
 <body class="bg-gray-50 font-sans">
     <div class="max-w-7xl mx-auto py-8 px-4">
-        <header class="mb-10">
-            <h1 class="text-3xl font-bold text-gray-900">Lead Generation Control Center</h1>
-            <p class="text-gray-600">Configure, run, and manage your scraping jobs.</p>
+        <header class="mb-10 flex justify-between items-start">
+            <div>
+                <h1 class="text-3xl font-bold text-gray-900">Lead Gen Engine</h1>
+                <p class="text-gray-600">Multi-Niche Lead Sourcing & Management</p>
+            </div>
+            <!-- Global Metrics Dashboard -->
+            <div id="globalMetrics" class="flex gap-4">
+                <div class="bg-white border p-3 px-6 rounded-lg shadow-sm text-center">
+                    <p class="text-[10px] font-bold text-gray-400 uppercase">Active Niches</p>
+                    <p id="metricNiches" class="text-xl font-bold text-blue-600">0</p>
+                </div>
+                <div class="bg-white border p-3 px-6 rounded-lg shadow-sm text-center">
+                    <p class="text-[10px] font-bold text-gray-400 uppercase">Total Source Files</p>
+                    <p id="metricFiles" class="text-xl font-bold text-green-600">0</p>
+                </div>
+            </div>
         </header>
+
+        <div id="nicheAlert" class="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg text-blue-800 text-sm font-medium flex justify-between items-center">
+            <span>Currently managing: <b id="activeNicheName">Loading...</b></span>
+            <button onclick="openConfigManager()" class="bg-blue-600 text-white px-3 py-1 rounded text-xs">Manage Lead Types</button>
+        </div>
 
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
             <!-- Left Column: Configuration & Upload -->
@@ -29,24 +47,58 @@
                     <form id="scrapeForm" class="space-y-4">
                         <div>
                             <label class="block text-sm font-medium text-gray-700">State</label>
-                            <input type="text" id="state" name="state" value="Missouri" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                            <input type="text" id="state" name="state" placeholder="State (e.g., California)" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Lead Type / Config</label>
+                            <select id="configId" name="config_id" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border" onchange="updateDefaultQuery()"></select>
                         </div>
                         <div>
                             <label class="block text-sm font-medium text-gray-700">Cities (comma separated)</label>
-                            <textarea id="cities" name="cities" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border" rows="3">Lee's Summit, St. Joseph</textarea>
+                            <textarea id="cities" name="cities" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border" rows="3" placeholder="City 1, City 2, City 3"></textarea>
                         </div>
                         <div>
                             <label class="block text-sm font-medium text-gray-700">Base Query</label>
-                            <input type="text" id="base_query" name="base_query" value="medical malpractice and personal injury lawyers" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                            <input type="text" id="base_query" name="base_query" placeholder="e.g., residential roofing contractors" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
                         </div>
                         <div>
                             <label class="block text-sm font-medium text-gray-700">Target per City</label>
-                            <input type="number" id="target" name="target" value="10" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                            <input type="number" id="target" name="target" placeholder="Count (e.g., 50)" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
                         </div>
                         <button type="submit" id="submitBtn" class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 transition font-medium">
                             Launch Scraper
                         </button>
                     </form>
+                </div>
+
+                <!-- AI Assistant Panel -->
+                <div class="bg-gray-900 p-6 rounded-xl shadow-sm text-white h-fit">
+                    <h2 class="text-xl font-semibold mb-2 flex items-center gap-2">
+                        <i class="fa-solid fa-wand-magic-sparkles text-blue-400"></i> AI Assistant
+                    </h2>
+                    <p class="text-xs text-gray-400 mb-4">Describe the leads you want (e.g., "Solar installers in Florida")</p>
+                    <div class="space-y-4">
+                        <textarea id="aiPrompt" class="w-full bg-gray-800 border border-gray-700 rounded-md p-2 text-sm text-white" rows="2" placeholder="Describe niche..."></textarea>
+                        <button onclick="getAISuggestion()" id="aiBtn" class="w-full bg-indigo-600 py-2 rounded-md hover:bg-indigo-500 transition text-sm font-bold">
+                            Suggest Scraper Config
+                        </button>
+                        <div id="aiGeneralError" class="mt-2 p-2 bg-red-900/30 border border-red-500/50 text-red-200 text-[10px] rounded hidden">
+                            <i class="fa-solid fa-circle-exclamation mr-1"></i>
+                            <span id="aiGeneralErrorText"></span>
+                        </div>
+                    </div>
+                    <div id="suggestionBox" class="mt-4 p-4 bg-gray-800 rounded border border-indigo-900 hidden">
+                        <p class="text-[10px] text-indigo-400 font-bold mb-4 uppercase">Refine Suggested Configuration</p>
+                        <div id="suggestionPreview" class="space-y-3 mb-4">
+                            <!-- Editable fields injected here -->
+                        </div>
+                        <div class="text-[9px] text-gray-500 mb-2 italic" id="aiModelInfo"></div>
+                        <div class="flex flex-wrap gap-2">
+                            <button onclick="acceptAISuggestion()" class="flex-1 bg-green-600 py-2 rounded text-xs font-bold">Verify & Save Lead Type</button>
+                            <button onclick="copySuggestionToClipboard()" class="bg-gray-700 p-2 rounded text-xs text-gray-300 hover:text-white" title="Copy JSON"><i class="fa-solid fa-copy"></i></button>
+                            <button onclick="document.getElementById('suggestionBox').classList.add('hidden')" class="bg-gray-700 py-2 px-4 rounded text-xs font-bold text-gray-300 hover:bg-gray-600 transition">Cancel</button>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Upload Panel -->
@@ -115,6 +167,7 @@
                                             <th class="px-3 py-2 text-left whitespace-nowrap">Phone</th>
                                             <th class="px-3 py-2 text-left whitespace-nowrap">Email</th>
                                             <th class="px-3 py-2 text-left whitespace-nowrap">Profile URL</th>
+                                            <th class="px-3 py-2 text-left whitespace-nowrap">LinkedIn</th>
                                             <th class="px-3 py-2 text-left whitespace-nowrap">Firm Name</th>
                                             <th class="px-3 py-2 text-left whitespace-nowrap">City</th>
                                             <th class="px-3 py-2 text-left whitespace-nowrap">State</th>
@@ -238,9 +291,110 @@
         </div>
     </div>
 
+    <!-- Config Management Modal -->
+    <div id="configModal" class="fixed inset-0 bg-black/50 hidden flex items-center justify-center z-50">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-2xl p-8 overflow-y-auto max-h-[90vh]">
+            <div class="flex justify-between items-center mb-6">
+                <h2 class="text-2xl font-bold">Lead Type Manager</h2>
+                <button onclick="closeConfigManager()" class="text-gray-400 hover:text-gray-600 text-2xl">&times;</button>
+            </div>
+            <div class="space-y-4 mb-8" id="configListContainer">
+                <!-- Config items list -->
+            </div>
+            <div class="mt-8 border-t pt-6">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="font-bold text-lg">Create New Lead Type</h3>
+                    <div class="flex gap-2">
+                        <input type="text" id="manual_ai_niche" placeholder="Describe niche for AI help..." class="text-xs border p-1 rounded w-48">
+                        <button onclick="suggestAllManualFields()" class="bg-indigo-100 text-indigo-700 px-3 py-1 rounded text-xs font-bold hover:bg-indigo-200">
+                            <i class="fa-solid fa-wand-magic-sparkles mr-1"></i> AI Fill All
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="grid grid-cols-2 gap-4 text-sm h-96 overflow-y-auto pr-2 p-1">
+                    <div class="col-span-1">
+                        <label class="block text-[10px] font-bold text-gray-400 uppercase">Unique ID</label>
+                        <input type="text" id="manual_id" placeholder="id (e.g. hvac)" class="w-full border p-2 rounded bg-gray-50">
+                    </div>
+                    <div class="col-span-1">
+                        <label class="block text-[10px] font-bold text-gray-400 uppercase">Display Name</label>
+                        <input type="text" id="manual_name" placeholder="Name (e.g. HVAC Companies)" class="w-full border p-2 rounded">
+                    </div>
+                    <div class="col-span-1">
+                        <label class="block text-[10px] font-bold text-gray-400 uppercase">Folder Name</label>
+                        <input type="text" id="manual_folder" placeholder="hvac_profiles" class="w-full border p-2 rounded">
+                    </div>
+                    <div class="col-span-1">
+                        <label class="block text-[10px] font-bold text-gray-400 uppercase">File Prefix</label>
+                        <input type="text" id="manual_prefix" placeholder="hvac" class="w-full border p-2 rounded">
+                    </div>
+                    
+                    <!-- AI Suggestion Fields -->
+                    <div class="col-span-2">
+                        <label class="flex justify-between text-[10px] font-bold text-gray-400 uppercase">
+                            Default Google Query
+                            <button onclick="suggestSingleField('manual_query', 'default_query', event)" class="text-indigo-500 hover:text-indigo-700"><i class="fa-solid fa-wand-sparkles"></i></button>
+                        </label>
+                        <input type="text" id="manual_query" placeholder="Best HVAC companies in" class="w-full border p-2 rounded">
+                    </div>
+
+                    <div class="col-span-1">
+                        <label class="flex justify-between text-[10px] font-bold text-gray-400 uppercase">
+                            Lead Roles (CSV)
+                            <button onclick="suggestSingleField('manual_roles', 'lead_role_keywords', event)" class="text-indigo-500 hover:text-indigo-700"><i class="fa-solid fa-wand-sparkles"></i></button>
+                        </label>
+                        <textarea id="manual_roles" placeholder="owner, manager, ceo" class="w-full border p-2 rounded h-20"></textarea>
+                    </div>
+                    <div class="col-span-1">
+                        <label class="flex justify-between text-[10px] font-bold text-gray-400 uppercase">
+                            Directory Keywords (CSV)
+                            <button onclick="suggestSingleField('manual_dir', 'directory_keywords', event)" class="text-indigo-500 hover:text-indigo-700"><i class="fa-solid fa-wand-sparkles"></i></button>
+                        </label>
+                        <textarea id="manual_dir" placeholder="team, about, staff" class="w-full border p-2 rounded h-20"></textarea>
+                    </div>
+                    <div class="col-span-1">
+                        <label class="flex justify-between text-[10px] font-bold text-gray-400 uppercase">
+                            Profile Keywords (CSV)
+                            <button onclick="suggestSingleField('manual_req', 'profile_required_keywords', event)" class="text-indigo-500 hover:text-indigo-700"><i class="fa-solid fa-wand-sparkles"></i></button>
+                        </label>
+                        <textarea id="manual_req" placeholder="HVAC, Air Conditioning" class="w-full border p-2 rounded h-20"></textarea>
+                    </div>
+                    <div class="col-span-1">
+                        <label class="flex justify-between text-[10px] font-bold text-gray-400 uppercase">
+                            URL Exclusions (CSV)
+                            <button onclick="suggestSingleField('manual_excl', 'slug_exclusion_keywords', event)" class="text-indigo-500 hover:text-indigo-700"><i class="fa-solid fa-wand-sparkles"></i></button>
+                        </label>
+                        <textarea id="manual_excl" placeholder="staff, contact" class="w-full border p-2 rounded h-20"></textarea>
+                    </div>
+                    <div class="col-span-2">
+                        <label class="flex justify-between text-[10px] font-bold text-gray-400 uppercase">
+                            Disposable Domain Exclusions (CSV)
+                            <button onclick="suggestSingleField('manual_disp', 'disposable_exclusion', event)" class="text-indigo-500 hover:text-indigo-700"><i class="fa-solid fa-wand-sparkles"></i></button>
+                        </label>
+                        <input type="text" id="manual_disp" placeholder="mailinator.com, tempmail.com" class="w-full border p-2 rounded">
+                    </div>
+                </div>
+                <div id="manualAIError" class="mt-3 p-2 bg-red-50 border border-red-200 text-red-700 text-[10px] rounded hidden">
+                    <i class="fa-solid fa-circle-exclamation mr-1"></i>
+                    <span id="manualAIErrorText"></span>
+                </div>
+                <div class="flex justify-between items-center mt-4">
+                    <div class="flex gap-3">
+                        <button onclick="saveManualConfig()" class="bg-blue-600 text-white px-4 py-2 rounded text-sm font-bold">Save New Type</button>
+                        <button onclick="closeConfigManager()" class="bg-gray-200 text-gray-700 px-4 py-2 rounded text-sm font-bold hover:bg-gray-300 transition">Cancel</button>
+                    </div>
+                    <button onclick="resetToDefaults()" class="text-xs text-gray-400 hover:text-red-500 transition"><i class="fa-solid fa-rotate-left mr-1"></i> Reset Attorney Defaults</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script>
         let activeJobId = null;
         let statusPoller = null;
+        let leadConfigs = [];
+        let currentSuggestion = null;
 
         document.getElementById('scrapeForm').addEventListener('submit', async (e) => {
             e.preventDefault();
@@ -254,7 +408,8 @@
                 state: formData.get('state'),
                 cities: formData.get('cities').split(',').map(c => c.trim()),
                 base_query: formData.get('base_query'),
-                target: parseInt(formData.get('target'))
+                target: parseInt(formData.get('target')),
+                config_id: formData.get('config_id')
             };
 
             try {
@@ -285,9 +440,10 @@
 
             const formData = new FormData();
             formData.append('file', fileInput.files[0]);
+            const currentFolder = getSelectedFolder();
 
             try {
-                const res = await fetch('/results/upload', {
+                const res = await fetch(`/results/upload?folder=${currentFolder}`, {
                     method: 'POST',
                     body: formData
                 });
@@ -301,6 +457,271 @@
                 }
             } catch (err) { alert('Failed to connect to server'); }
         });
+
+        async function loadConfigs() {
+            const res = await fetch('/configs');
+            leadConfigs = await res.json();
+            const select = document.getElementById('configId');
+            select.innerHTML = leadConfigs.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+            
+            // Auto-select first or previously selected
+            const lastConfig = localStorage.getItem('last_config_id');
+            if (lastConfig && leadConfigs.find(c => c.id === lastConfig)) {
+                select.value = lastConfig;
+            }
+
+            updateOverallMetrics();
+            updateDefaultQuery();
+        }
+
+        function updateDefaultQuery() {
+            const configId = document.getElementById('configId').value;
+            const config = leadConfigs.find(c => c.id === configId);
+            if (config) {
+                localStorage.setItem('last_config_id', configId);
+                document.getElementById('activeNicheName').innerText = config.name;
+                document.getElementById('base_query').value = config.default_query;
+                document.getElementById('masterFilename').value = config.file_prefix + "_profiles_master";
+                
+                // Refresh all niche-specific lists
+                loadFiles(); loadUploadedFiles(); loadConsolidatedFiles(); loadSavedFiles();
+            }
+        }
+
+        function getSelectedFolder() {
+            const configId = document.getElementById('configId').value;
+            const config = leadConfigs.find(c => c.id === configId);
+            return config ? config.folder_name : 'attorney_profiles';
+        }
+
+        async function updateOverallMetrics() {
+            const res = await fetch('/metrics/overall');
+            const data = await res.json();
+            document.getElementById('metricNiches').innerText = data.total_niches;
+            document.getElementById('metricFiles').innerText = data.approx_total_files;
+        }
+
+        function showAIError(containerId, textId, message) {
+            const container = document.getElementById(containerId);
+            const text = document.getElementById(textId);
+            text.innerText = message;
+            container.classList.remove('hidden');
+            setTimeout(() => { container.classList.add('hidden'); }, 8000);
+        }
+
+        async function getAISuggestion() {
+            const prompt = document.getElementById('aiPrompt').value;
+            if (!prompt) return alert("Please describe your target leads.");
+            
+            const aiBtn = document.getElementById('aiBtn');
+            document.getElementById('aiGeneralError').classList.add('hidden');
+            aiBtn.disabled = true; aiBtn.innerText = "Analyzing...";
+            
+            try {
+                const res = await fetch(`/ai/suggest-config?description=${encodeURIComponent(prompt)}`, { method: 'POST' });
+                if (!res.ok) {
+                    const err = await res.json();
+                    showAIError('aiGeneralError', 'aiGeneralErrorText', err.detail || "AI Service Error");
+                    aiBtn.disabled = false; aiBtn.innerText = "Suggest Scraper Config";
+                    return;
+                }
+            currentSuggestion = await res.json();
+            
+                document.getElementById('aiModelInfo').innerText = `Generated by ${currentSuggestion._ai_model || 'Heuristic Engine'}`;
+
+                if (currentSuggestion._is_fallback) {
+                    showAIError('aiGeneralError', 'aiGeneralErrorText', "Note: AI models were busy or unavailable. Used heuristic suggestions instead.");
+                }
+
+            const preview = document.getElementById('suggestionPreview');
+            preview.innerHTML = `
+                <div class="text-gray-300"><b>ID:</b> <input id="edit_id" value="${currentSuggestion.id}" class="bg-transparent border-b border-gray-600 ml-2"></div>
+                <div class="text-gray-300"><b>Name:</b> <input id="edit_name" value="${currentSuggestion.name}" class="bg-transparent border-b border-gray-600 ml-2"></div>
+                <div class="text-gray-300"><b>Query:</b> <input id="edit_query" value="${currentSuggestion.default_query}" class="bg-transparent border-b border-gray-600 ml-2 w-full mt-1"></div>
+                <div class="text-gray-300 mt-2"><b>Role Keywords (CSV):</b> <input id="edit_roles" value="${currentSuggestion.lead_role_keywords.join(', ')}" class="bg-transparent border-b border-gray-600 ml-2 w-full mt-1"></div>
+                <div class="text-gray-300 mt-2"><b>Dir Keywords (CSV):</b> <input id="edit_dir" value="${currentSuggestion.directory_keywords.join(', ')}" class="bg-transparent border-b border-gray-600 ml-2 w-full mt-1"></div>
+            `;
+            
+            document.getElementById('suggestionBox').classList.remove('hidden');
+            } catch (e) {
+                showAIError('aiGeneralError', 'aiGeneralErrorText', "Connection failed: Ensure API is running.");
+            }
+            aiBtn.disabled = false; aiBtn.innerText = "Suggest Scraper Config";
+        }
+
+        function copySuggestionToClipboard() {
+            if(!currentSuggestion) return;
+            navigator.clipboard.writeText(JSON.stringify(currentSuggestion, null, 2));
+            alert("Configuration JSON copied to clipboard!");
+        }
+
+        async function acceptAISuggestion() {
+            if (!currentSuggestion) return;
+            
+            // Capture manual edits
+            currentSuggestion.id = document.getElementById('edit_id').value;
+            currentSuggestion.name = document.getElementById('edit_name').value;
+            currentSuggestion.default_query = document.getElementById('edit_query').value;
+            currentSuggestion.lead_role_keywords = document.getElementById('edit_roles').value.split(',').map(s => s.trim());
+            currentSuggestion.directory_keywords = document.getElementById('edit_dir').value.split(',').map(s => s.trim());
+            currentSuggestion.folder_name = currentSuggestion.id + "_leads";
+
+            await fetch('/configs', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(currentSuggestion)
+            });
+            alert("Config saved! Re-loading types...");
+            document.getElementById('suggestionBox').classList.add('hidden');
+            document.getElementById('aiPrompt').value = '';
+            loadConfigs();
+        }
+
+        function openConfigManager() {
+            document.getElementById('configModal').classList.remove('hidden');
+            const container = document.getElementById('configListContainer');
+            container.innerHTML = leadConfigs.map(c => `
+                <div class="flex justify-between items-center p-3 bg-gray-50 rounded border">
+                    <div>
+                        <p class="font-bold">${c.name} <span class="text-xs font-normal text-gray-500">(${c.id})</span></p>
+                        <p class="text-[10px] text-gray-400 uppercase tracking-tighter">Query: ${c.default_query}</p>
+                    </div>
+                    <button onclick="deleteConfig('${c.id}')" class="text-red-500 text-xs font-bold px-2">Delete</button>
+                </div>
+            `).join('');
+        }
+
+        function closeConfigManager() {
+            document.getElementById('configModal').classList.add('hidden');
+        }
+
+        async function resetToDefaults() {
+            if(!confirm("Restore Attorney leads to original settings? This will overwrite existing Attorney config.")) return;
+            await fetch('/configs/reset-default', { method: 'POST' });
+            loadConfigs();
+            openConfigManager();
+        }
+
+        async function deleteConfig(configId) {
+            if (!confirm(`Are you sure you want to delete the lead type "${configId}"?`)) return;
+            try {
+                const res = await fetch(`/configs/${configId}`, { method: 'DELETE' });
+                if (res.ok) {
+                    alert("Lead type deleted.");
+                    await loadConfigs();
+                    openConfigManager(); // Refresh list
+                } else {
+                    const err = await res.json();
+                    alert("Error: " + (err.detail || "Failed to delete"));
+                }
+            } catch (e) {
+                alert("Connection error during deletion.");
+            }
+        }
+
+        async function suggestAllManualFields() {
+            const niche = document.getElementById('manual_ai_niche').value;
+            if (!niche) return alert("Please describe the niche first.");
+            document.getElementById('manualAIError').classList.add('hidden');
+            
+            try {
+                const res = await fetch(`/ai/suggest-config?description=${encodeURIComponent(niche)}`, { method: 'POST' });
+                if (!res.ok) {
+                    const err = await res.json();
+                    showAIError('manualAIError', 'manualAIErrorText', err.detail || "AI error");
+                    return;
+                }
+            const suggestion = await res.json();
+                
+                if (suggestion._is_fallback) {
+                    showAIError('manualAIError', 'manualAIErrorText', "AI limit reached. Using heuristic fallback.");
+                }
+            
+            document.getElementById('manual_id').value = suggestion.id;
+            document.getElementById('manual_name').value = suggestion.name;
+            document.getElementById('manual_folder').value = suggestion.folder_name;
+            document.getElementById('manual_prefix').value = suggestion.file_prefix;
+            document.getElementById('manual_query').value = suggestion.default_query;
+            document.getElementById('manual_roles').value = suggestion.lead_role_keywords.join(', ');
+            document.getElementById('manual_dir').value = suggestion.directory_keywords.join(', ');
+            document.getElementById('manual_req').value = suggestion.profile_required_keywords.join(', ');
+            document.getElementById('manual_excl').value = suggestion.slug_exclusion_keywords.join(', ');
+            document.getElementById('manual_disp').value = (suggestion.disposable_exclusion || []).join(', ');
+            } catch (e) {
+                showAIError('manualAIError', 'manualAIErrorText', "AI Assistant error: " + e.message);
+            }
+        }
+
+        async function suggestSingleField(inputId, fieldType, event) {
+            const niche = document.getElementById('manual_ai_niche').value || document.getElementById('manual_name').value;
+            if (!niche) return alert("Describe the niche in the helper box above or fill the Name field first.");
+            
+            const btn = event.currentTarget;
+            const originalHtml = btn.innerHTML;
+            btn.innerHTML = '<i class="fa-solid fa-spinner spinner-anim"></i>';
+            btn.disabled = true;
+            document.getElementById('manualAIError').classList.add('hidden');
+
+            try {
+                const res = await fetch(`/ai/suggest-field?field=${fieldType}&description=${encodeURIComponent(niche)}`, { method: 'POST' });
+                if (!res.ok) {
+                    const err = await res.json();
+                    throw new Error(err.detail || "Field error");
+                }
+                const data = await res.json();
+                const suggestion = data.values;
+                const input = document.getElementById(inputId);
+                
+                if (Array.isArray(suggestion)) {
+                    if (suggestion.length === 1 && suggestion[0].includes("Error")) {
+                        showAIError('manualAIError', 'manualAIErrorText', suggestion[0]);
+                    } else {
+                        input.value = suggestion.join(', ');
+                    }
+                } else {
+                    input.value = suggestion;
+                }
+            } catch (e) {
+                showAIError('manualAIError', 'manualAIErrorText', "AI Field error: " + e.message);
+            } finally {
+                btn.innerHTML = originalHtml;
+                btn.disabled = false;
+            }
+        }
+
+        async function saveManualConfig() {
+            const config = {
+                id: document.getElementById('manual_id').value,
+                name: document.getElementById('manual_name').value,
+                folder_name: document.getElementById('manual_folder').value,
+                file_prefix: document.getElementById('manual_prefix').value || document.getElementById('manual_id').value.substring(0,5),
+                default_query: document.getElementById('manual_query').value,
+                directory_keywords: document.getElementById('manual_dir').value.split(',').map(s => s.trim()).filter(s => s),
+                profile_required_keywords: document.getElementById('manual_req').value.split(',').map(s => s.trim()).filter(s => s),
+                lead_role_keywords: document.getElementById('manual_roles').value.split(',').map(s => s.trim()).filter(s => s),
+                slug_exclusion_keywords: document.getElementById('manual_excl').value.split(',').map(s => s.trim()).filter(s => s),
+                disposable_exclusion: document.getElementById('manual_disp').value.split(',').map(s => s.trim()).filter(s => s)
+            };
+
+            if(!config.id || !config.name) return alert("ID and Name are required.");
+            
+            try {
+                const res = await fetch('/configs', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(config)
+                });
+                if (res.ok) {
+                    loadConfigs();
+                    closeConfigManager();
+                } else {
+                    const err = await res.json();
+                    showAIError('manualAIError', 'manualAIErrorText', err.detail || "Failed to save config");
+                }
+            } catch (e) {
+                showAIError('manualAIError', 'manualAIErrorText', "Server connection lost.");
+            }
+        }
 
         function resetSubmitButton() {
             const submitBtn = document.getElementById('submitBtn');
@@ -384,6 +805,7 @@
                                 <td class="px-3 py-1 text-gray-500 whitespace-nowrap">${l.Phone || ''}</td>
                                 <td class="px-3 py-1 text-gray-500 whitespace-nowrap">${l.Email}</td>
                                 <td class="px-3 py-1 text-blue-500 truncate max-w-xs"><a href="${l.URL}" target="_blank" class="hover:underline">${l.URL || ''}</a></td>
+                                <td class="px-3 py-1 text-blue-500 truncate max-w-xs"><a href="${l.LinkedIn}" target="_blank" class="hover:underline">${l.LinkedIn || ''}</a></td>
                                 <td class="px-3 py-1 text-gray-500 whitespace-nowrap">${l.Firm || ''}</td>
                                 <td class="px-3 py-1 text-gray-400 whitespace-nowrap">${l.City}</td>
                                 <td class="px-3 py-1 text-gray-400 whitespace-nowrap">${l.State || ''}</td>
@@ -392,8 +814,10 @@
                         ).reverse().join('');
                         
                         // Dynamically update a mock download link for the live data
-                        const csvContent = "Name,Phone,Email,Profile URL,Firm Name,City,State,Verified By\n" + 
-                            status.recent_leads.map(l => `"${l.Name}","${l.Phone || ''}","${l.Email}","${l.URL || ''}","${l.Firm || ''}","${l.City}","${l.State || ''}","${l.VerifiedBy || ''}"`).join("\n");
+                        const csvHeaders = "Name,Phone,Email,Profile URL,LinkedIn,Firm Name,City,State,Verified By\n";
+                        const csvContent = csvHeaders + status.recent_leads.map(l => 
+                            `"${l.Name}","${l.Phone || ''}","${l.Email}","${l.URL || ''}","${l.LinkedIn || ''}","${l.Firm || ''}","${l.City}","${l.State || ''}","${l.VerifiedBy || ''}"`
+                        ).join("\n");
                         const blob = new Blob([csvContent], { type: 'text/csv' });
                         document.getElementById('liveDownloadBtn').onclick = () => {
                             const url = window.URL.createObjectURL(blob);
@@ -495,11 +919,12 @@
         async function consolidateLeads() {
             const filename = document.getElementById('masterFilename').value || 'attorney_profiles_master';
             const includeUploaded = document.getElementById('includeUploaded').checked;
+            const folder = getSelectedFolder();
             
             const res = await fetch('/results/consolidate', { 
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ filename, include_uploaded: includeUploaded })
+                body: JSON.stringify({ filename, include_uploaded: includeUploaded, folder })
             });
             const data = await res.json();
             alert(data.message);
@@ -519,8 +944,9 @@
         }
 
         async function loadFiles() {
+            const folder = getSelectedFolder();
             try {
-                const res = await fetch('/results');
+                const res = await fetch(`/results?folder=${folder}`);
                 const data = await res.json();
                 const list = document.getElementById('fileList');
                 list.innerHTML = '';
@@ -570,8 +996,9 @@
         }
 
         async function loadSavedFiles() {
+            const folder = getSelectedFolder();
             try {
-                const res = await fetch('/results/saved');
+                const res = await fetch(`/results/saved?folder=${folder}`);
                 const data = await res.json();
                 const list = document.getElementById('savedFileList');
                 list.innerHTML = '';
@@ -592,7 +1019,8 @@
         }
 
         async function loadUploadedFiles() {
-            const res = await fetch('/results/uploaded');
+            const folder = getSelectedFolder();
+            const res = await fetch(`/results/uploaded?folder=${folder}`);
             const data = await res.json();
             const list = document.getElementById('uploadedFileList');
             list.innerHTML = '';
@@ -613,7 +1041,8 @@
         }
 
         async function loadConsolidatedFiles() {
-            const res = await fetch('/results/consolidated');
+            const folder = getSelectedFolder();
+            const res = await fetch(`/results/consolidated?folder=${folder}`);
             const data = await res.json();
             const list = document.getElementById('consolidatedFileList');
             list.innerHTML = '';
@@ -654,7 +1083,7 @@
             document.getElementById('previewContainer').classList.add('hidden');
         }
 
-        loadFiles();
+        loadConfigs();
         loadUploadedFiles();
         loadConsolidatedFiles();
         loadSavedFiles();

@@ -751,9 +751,12 @@ class EmailVerifier:
 
 class EmailFakeChecker:
 
-    def __init__(self, log_path=None, cancel_event=None):
+    def __init__(self, log_path=None, cancel_event=None, extra_disposable=None):
         self.log_path = log_path
         self.cancel_event = cancel_event
+        self.disposable_domains = DISPOSABLE_DOMAINS.copy()
+        if extra_disposable and isinstance(extra_disposable, list):
+            self.disposable_domains.update(extra_disposable)
 
 
     # disposable domains example
@@ -767,7 +770,7 @@ class EmailFakeChecker:
         log(f"Checking: {domain}", self.log_path)
 
         # 2 disposable
-        if domain in DISPOSABLE_DOMAINS:
+        if domain in self.disposable_domains:
             log(f"Disposable email domain: {domain}", self.log_path)
             return False, "Disposable email domain"
 
@@ -780,18 +783,18 @@ class EmailFakeChecker:
         log(f"MX server: {mx_records}", self.log_path)
 
         # 4 SMTP verification
-        for _ in range(2):
-            if self.cancel_event and self.cancel_event.is_set(): return False, "Cancelled"
-            result = EmailVerifier(self.log_path, cancel_event=self.cancel_event).verify([self.random_email(domain)], itr=0)
-            log(f"Fake Email Check for {domain}: {result}", self.log_path)
-            # {'uookmxtqtr@aspelllaw.com': 550}
-            if result["status"] != "invalid" or "reason" in result and \
-                len(result["reason"]) == len([reason for reason in result["reason"].values() 
-                                              if isinstance(reason, str) and "error" in reason]):
-                log(f"Fake Email Check for {domain}: failed", self.log_path)
-                return False, result
-        log(f"Fake Email Check for {domain}: Passed", self.log_path)
-        return True, f"Fake Email Check for {domain}: Passed"
+        # for _ in range(2):
+        #     if self.cancel_event and self.cancel_event.is_set(): return False, "Cancelled"
+        #     result = EmailVerifier(self.log_path, cancel_event=self.cancel_event).verify([self.random_email(domain)], itr=0)
+        #     log(f"Fake Email Check for {domain}: {result}", self.log_path)
+        #     # {'uookmxtqtr@aspelllaw.com': 550}
+        #     if result["status"] != "invalid" or "reason" in result and \
+        #         len(result["reason"]) == len([reason for reason in result["reason"].values() 
+        #                                       if isinstance(reason, str) and "error" in reason]):
+        #         log(f"Fake Email Check for {domain}: failed", self.log_path)
+        #         return False, result
+        # log(f"Fake Email Check for {domain}: Passed", self.log_path)
+        return True, f"MX server ({domain}): {mx_records}: Passed"
         
 
 

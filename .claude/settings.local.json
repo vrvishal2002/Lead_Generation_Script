@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(venv\\\\Scripts\\\\pip.exe install *)",
+      "Bash(python -c ' *)",
+      "PowerShell(kubectl logs -n lead-gen -l app=lead-gen-api --previous 2>&1)",
+      "PowerShell(kubectl get pods -n lead-gen -o wide 2>&1)",
+      "PowerShell(kubectl logs -n lead-gen lead-gen-api-94f777d5c-hklrt 2>&1)",
+      "PowerShell(kubectl rollout status deployment/lead-gen-api -n lead-gen --timeout=120s 2>&1)",
+      "PowerShell(kubectl apply -f selenium-grid.yaml 2>&1)",
+      "PowerShell(kubectl get pods -n selenium 2>&1)",
+      "PowerShell(kubectl get service selenium-hub -n selenium 2>&1)",
+      "PowerShell(kubectl get nodes -o custom-columns=\"NAME:.metadata.name,SIZE:.metadata.labels['beta\\\\.kubernetes\\\\.io/instance-type'],CPU:.status.capacity.cpu,MEMORY:.status.capacity.memory\" 2>&1)",
+      "PowerShell(docker push azleadgenacr.azurecr.io/lead-gen-api:latest 2>&1)",
+      "PowerShell(az acr login --name azleadgenacr 2>&1)",
+      "PowerShell(kubectl rollout restart deployment/selenium-hub -n selenium 2>&1)",
+      "PowerShell(kubectl rollout status deployment/selenium-hub -n selenium --timeout=60s 2>&1)"
+    ]
+  }
+}

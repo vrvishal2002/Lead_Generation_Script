@@ -1,0 +1,53 @@
+name: Deploy to Azure AKS
+
+on:
+  push:
+    branches: ["main"]
+
+env:
+  ACR_REGISTRY: azleadgenacr.azurecr.io
+  IMAGE_NAME: lead-gen-api
+  AKS_NAMESPACE: lead-gen
+  DEPLOYMENT_NAME: lead-gen-api
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Login to Azure Container Registry
+        run: az acr login --name azleadgenacr
+
+      - name: Build and push image to ACR
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ACR_REGISTRY/$IMAGE_NAME:$IMAGE_TAG .
+          docker tag $ACR_REGISTRY/$IMAGE_NAME:$IMAGE_TAG $ACR_REGISTRY/$IMAGE_NAME:latest
+          docker push $ACR_REGISTRY/$IMAGE_NAME:$IMAGE_TAG
+          docker push $ACR_REGISTRY/$IMAGE_NAME:latest
+
+      - name: Set AKS context
+        uses: azure/aks-set-context@v3
+        with:
+          resource-group: ${{ secrets.AKS_RESOURCE_GROUP }}
+          cluster-name: ${{ secrets.AKS_CLUSTER_NAME }}
+
+      - name: Deploy to AKS
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          kubectl set image deployment/$DEPLOYMENT_NAME \
+            $DEPLOYMENT_NAME=$ACR_REGISTRY/$IMAGE_NAME:$IMAGE_TAG \
+            -n $AKS_NAMESPACE
+          kubectl rollout status deployment/$DEPLOYMENT_NAME -n $AKS_NAMESPACE --timeout=120s

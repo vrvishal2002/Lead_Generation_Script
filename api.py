@@ -1,35 +1,103 @@
 import threading
 import uuid
 import time
-import os
+import os, json
 import csv, io
-import boto3
 from pathlib import Path
-import glob
 from contextlib import asynccontextmanager
+from google import genai
 import pandas as pd
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Query, File, UploadFile
 from fastapi.responses import StreamingResponse
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
-from typing import List, Dict
+from pydantic import BaseModel, Field
+from typing import List, Dict, Optional
 from lead_generation_helper import LeadGenerationHelper
 from firm_parser import FirmParser
 from log_lib import log, get_domain_names, get_lead_profile_names, csv_file_lock
+import storage_lib
 
-S3_BUCKET = os.environ.get("S3_BUCKET_NAME")
-AWS_REGION = os.environ.get("AWS_REGION", "ap-south-1")
-s3_client = boto3.client('s3', region_name=AWS_REGION) if S3_BUCKET else None
+# Configure Gemini AI
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "AIzaSyBNhQK0iONS8JYDrHSPPpbNNpwegaSZgHY")
+ai_client = None
+if GOOGLE_API_KEY:
+    try:
+        ai_client = genai.Client(api_key=GOOGLE_API_KEY)
+    except Exception as e:
+        log(f"AI Initialization Failed: {e}")
+
+# Initialize Config Storage
+CONFIG_DIR = Path("configs")
+CONFIG_DIR.mkdir(exist_ok=True)
+
+# Seed default attorney config if missing
+def seed_configs():
+    """Ensures the default attorney configuration exists."""
+    if not (CONFIG_DIR / "attorney.json").exists():
+        with open(CONFIG_DIR / "attorney.json", "w") as f:
+            json.dump({
+                "id": "attorney",
+                "name": "Attorney Leads",
+                "folder_name": "attorney_profiles",
+                "file_prefix": "attorney",
+                "default_query": "medical malpractice and personal injury lawyers in",
+                "directory_keywords": [
+                    "attorneys", "our-team", "team", "legal-team", "lawyers", "meet",
+                    "profiles", "about", "people", "paralegals", "advocates"
+                ],
+                "profile_required_keywords": [
+                    "personal injury", "medical malpractice", "medical negligence",
+                    "wrongful death", "accident", "dog bite", "drug"
+                ],
+                "lead_role_keywords": [
+                    "associate", "attorney", "advocate", "lawyer", "partner",
+                    "paralegal", "legal", "esq", "of counsel", "senior", "principal"
+                ],
+                "slug_exclusion_keywords": [
+                    "attorney", "lawyer", "profile", "legal", "contact",
+                    "disclaimer", "privacy", "blog", "news"
+                ],
+                "disposable_exclusion": [
+                    "mailinator.com", "tempmail.com", "10minutemail.com", "guerrillamail.com",
+                    "protectingpatientrights.com", "cellinolaw.com", "cartermario.com",
+                    "brandonjbroderick.com", "carmodylaw.com", "danaherlagnese.com",
+                    "brownandcrouppen.com", "devaultlaw.com", "www.devaultlaw.com"
+                ]
+            }, f, indent=4)
+
+seed_configs()
 
 shutdown_event = threading.Event()
 
+class LeadConfig(BaseModel):
+    id: str = Field(..., description="Unique ID for the lead type")
+    name: str = Field(..., description="Display name (e.g., Real Estate Leads)")
+    folder_name: str = Field(..., description="Storage directory name")
+    file_prefix: str = Field(..., description="Prefix for generated files")
+    default_query: str = Field(..., description="Template for Google search")
+    directory_keywords: List[str] = Field(default_factory=list)
+    profile_required_keywords: List[str] = Field(default_factory=list)
+    lead_role_keywords: List[str] = Field(default_factory=list)
+    slug_exclusion_keywords: List[str] = Field(default_factory=list)
+    disposable_exclusion: List[str] = Field(default_factory=list)
+
 def is_safe_path(path: str) -> bool:
     """Validates that the path is within allowed directories."""
-    base_dirs = [
-        os.path.abspath("attorney_profiles"),
-        os.path.abspath("Firms_details"),
-        os.path.abspath("attorney_profiles/saved")
-    ]
+    base_dirs = [os.path.abspath("Firms_details")]
+
+    # Dynamically allow all folders defined in configs
+    for cfg_file in CONFIG_DIR.glob("*.json"):
+        try:
+            with open(cfg_file, 'r') as f:
+                cfg = json.load(f)
+                folder = cfg.get("folder_name")
+                if folder:
+                    base_dirs.append(os.path.abspath(folder))
+                    base_dirs.append(os.path.abspath(os.path.join(folder, "saved")))
+                    base_dirs.append(os.path.abspath(os.path.join(folder, "uploaded")))
+                    base_dirs.append(os.path.abspath(os.path.join(folder, "consolidated")))
+        except: continue
+
     try:
         target_path = os.path.abspath(path)
         return any(target_path.startswith(d) for d in base_dirs)
@@ -38,14 +106,13 @@ def is_safe_path(path: str) -> bool:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup logic
-    if S3_BUCKET:
+    # Startup: verify cloud storage connection if configured
+    if storage_lib.is_cloud():
         try:
-            # Attempt to list objects to verify IAM permissions and bucket existence
-            s3_client.list_objects_v2(Bucket=S3_BUCKET, MaxKeys=1)
-            print(f"AWS CONFIG SUCCESS: Successfully connected to S3 bucket: {S3_BUCKET}")
+            storage_lib.verify_connection()
         except Exception as e:
-            print(f"AWS CONFIG ERROR: Critical failure connecting to S3. Check IAM Role and S3_BUCKET_NAME.")
+            backend = storage_lib.get_backend().upper()
+            print(f"{backend} CONFIG ERROR: Could not connect to storage. Check credentials and bucket name.")
             print(f"Error Detail: {str(e)}")
 
     yield
@@ -72,66 +139,192 @@ async def serve_dashboard():
 @app.get("/health")
 async def health_check():
     """API Health Check."""
-    return {"status": "healthy", "active_jobs": len(active_jobs)}
+    return {
+        "status": "healthy",
+        "active_jobs": len(active_jobs),
+        "storage_backend": storage_lib.get_backend()
+    }
+
+@app.get("/configs")
+async def list_configs():
+    """Lists all available lead generation configurations."""
+    seed_configs()
+    configs = []
+    for cfg_file in CONFIG_DIR.glob("*.json"):
+        try:
+            with open(cfg_file, 'r') as f:
+                configs.append(json.load(f))
+        except Exception as e:
+            log(f"Error loading config {cfg_file}: {str(e)}")
+    return configs
+
+@app.post("/configs")
+async def save_config(config: LeadConfig):
+    """Saves a new lead generation configuration."""
+    file_path = CONFIG_DIR / f"{config.id}.json"
+    try:
+        with open(file_path, 'w') as f:
+            json.dump(config.dict(), f, indent=4)
+        return {"message": f"Config '{config.name}' saved successfully."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/configs/{config_id}")
+async def delete_config(config_id: str):
+    """Deletes a lead generation configuration."""
+    file_path = CONFIG_DIR / f"{config_id}.json"
+    if file_path.exists():
+        os.remove(file_path)
+        return {"message": f"Config '{config_id}' deleted successfully."}
+    raise HTTPException(status_code=404, detail="Config not found")
+
+@app.post("/configs/reset-default")
+async def reset_default_config():
+    """Restores the hardcoded attorney default configuration."""
+    file_path = CONFIG_DIR / "attorney.json"
+    if file_path.exists():
+        os.remove(file_path)
+    seed_configs()
+    return {"message": "Attorney configuration reset to default values."}
+
+@app.post("/ai/suggest-config")
+async def ai_suggest_config(description: str = Query(...)):
+    """AI Logic to suggest configuration based on user requirement."""
+    slug = description.lower().replace(" ", "_")[:10]
+    fallback = {
+        "id": slug, "name": f"{description.title()} Leads",
+        "folder_name": f"{slug}_profiles", "file_prefix": slug[:5],
+        "default_query": f"best {description} companies in",
+        "directory_keywords": ["team", "about", "staff", "people", "profiles"],
+        "profile_required_keywords": [description.split()[0]] if description else [],
+        "lead_role_keywords": ["owner", "manager", "founder", "director"],
+        "slug_exclusion_keywords": ["contact", "privacy", "terms"],
+        "disposable_exclusion": ["tempmail.com", "mailinator.com"],
+        "_is_fallback": True
+    }
+
+    if not ai_client:
+        return fallback
+
+    try:
+        prompt = f"""
+    Act as a Lead Generation Expert. Suggest a JSON configuration for sourcing leads in this niche: "{description}".
+    Return ONLY a valid JSON object with these keys:
+    "id" (short slug), "name" (Display Name), "folder_name" (id + _profiles),
+    "file_prefix" (3-5 chars), "default_query" (Google search query ending with 'in'),
+    "directory_keywords" (List: common URL slugs like 'team', 'staff'),
+    "profile_required_keywords" (List: words that must appear in a profile to be valid),
+    "lead_role_keywords" (List: job titles to search for),
+    "slug_exclusion_keywords" (List: URL parts to ignore),
+    "disposable_exclusion" (List: email domains to skip).
+    """
+        models_to_try = ['gemini-2.5-flash', 'gemini-flash-latest', 'gemma-3-27b-it']
+        response = None
+        used_model = "None"
+
+        for model_id in models_to_try:
+            try:
+                response = ai_client.models.generate_content(model=model_id, contents=prompt)
+                if response and response.text:
+                    used_model = model_id
+                    break
+            except Exception as e:
+                err_msg = str(e)
+                log(f"AI Model {model_id} failed: {err_msg}")
+                continue
+
+        if response and response.text:
+            clean_json = response.text.strip().replace("```json", "").replace("```", "")
+            config_data = json.loads(clean_json)
+            config_data["_ai_model"] = used_model
+            return config_data
+        else:
+            raise Exception("All AI models failed to respond.")
+    except Exception as e:
+        log(f"AI Suggestion Error (Falling back to heuristics): {str(e)}")
+        fallback["_error_reason"] = str(e)
+        return fallback
+
+@app.post("/ai/suggest-field")
+async def ai_suggest_field(field: str = Query(...), description: str = Query(...)):
+    """AI Logic to suggest a specific field value based on niche description."""
+    if not ai_client:
+        return ["AI disabled: Set GOOGLE_API_KEY"]
+
+    try:
+        prompt = f"Given the niche '{description}', provide a comma-separated list of values for the configuration field '{field}' used in lead scraping. Return only the values."
+        models_to_try = ['gemini-2.5-flash', 'gemini-flash-latest', 'gemma-3-27b-it']
+        response = None
+        used_model = "None"
+
+        for model_id in models_to_try:
+            try:
+                response = ai_client.models.generate_content(model=model_id, contents=prompt)
+                if response and response.text:
+                    used_model = model_id
+                    break
+            except Exception as e:
+                log(f"AI Field Model {model_id} failed: {e}")
+                continue
+
+        if response and response.text:
+            values = [v.strip() for v in response.text.split(",")]
+            return {"values": values, "model": used_model}
+        else:
+            raise Exception("AI could not generate field values.")
+    except Exception as e:
+        log(f"AI Field Suggestion Error: {str(e)}")
+        return {"values": ["Heuristic Error: Try describing the niche differently"], "model": "None"}
+
+@app.get("/metrics/overall")
+async def get_overall_metrics():
+    """Aggregates metrics across all lead types/configs."""
+    configs = await list_configs()
+    total_leads = 0
+    niche_stats = []
+
+    for cfg in configs:
+        folder = cfg["folder_name"]
+        files_info = storage_lib.list_files(f"{folder}/")
+        leads_in_niche = len(files_info)
+        total_leads += leads_in_niche
+        niche_stats.append({"name": cfg["name"], "files": leads_in_niche})
+
+    return {
+        "total_niches": len(configs),
+        "approx_total_files": total_leads,
+        "niche_breakdown": niche_stats
+    }
 
 @app.delete("/results/delete")
-async def delete_file(path: str = Query(...), password: str = Query(...)):
+async def delete_result_file(path: str = Query(...), password: str = Query(...)):
     """Deletes a file if the password is correct."""
     if password != "admin123":
         raise HTTPException(status_code=403, detail="Invalid password.")
-    
-    if S3_BUCKET:
-        try:
-            s3_client.delete_object(Bucket=S3_BUCKET, Key=path)
-            return {"message": "File deleted from S3"}
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
-    else:
-        if not is_safe_path(path) or not os.path.exists(path):
+
+    try:
+        if not storage_lib.is_cloud() and (not is_safe_path(path) or not os.path.exists(path)):
             raise HTTPException(status_code=404, detail="File not found")
-        try:
-            os.remove(path)
-            return {"message": "File deleted successfully"}
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+        storage_lib.delete_file(path)
+        return {"message": "File deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/results")
-async def list_results():
-    """Lists all CSV files found in the attorney_profiles directory."""
+async def list_results(folder: str = Query(default="attorney_profiles")):
+    """Lists all CSV files found in the specified profiles directory."""
     results = {}
-    if S3_BUCKET:
-        try:
-            resp = s3_client.list_objects_v2(Bucket=S3_BUCKET, Prefix="attorney_profiles/")
-            # Sort S3 objects chronologically ascending
-            contents = sorted(resp.get('Contents', []), key=lambda x: x['LastModified'])
-            files = [obj['Key'] for obj in contents if obj['Key'].endswith('.csv')]
-            files = [f for f in files if all(x not in f for x in ["uploaded/", "consolidated/", "saved/"])]
-            
-            # Group by state (folder)
-            for f in files:
-                parts = f.split('/')
-                state = parts[1] if len(parts) > 2 else "Uncategorized"
-                if state not in results: results[state] = []
-                results[state].append(f)
-            return results
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"S3 Error: {str(e)}")
-        
-    files = glob.glob("attorney_profiles/**/*.csv", recursive=True)
-    files = [f for f in files if all(x not in f.replace("\\", "/").split("/") for x in ["uploaded", "consolidated", "saved"])]
-    
-    # Sort by modification time ascending (oldest first)
-    files.sort(key=os.path.getmtime, reverse=False)
+    files_info = storage_lib.list_files(f"{folder}/", sort_by_time=True)
+    files = [obj["Key"] for obj in files_info]
+    # Exclude sub-folders used for saved/uploaded/consolidated artefacts
+    files = [f for f in files if all(x not in f for x in ["uploaded/", "consolidated/", "saved/"])]
 
     for f in files:
         f_clean = f.replace("\\", "/")
         parts = f_clean.split("/")
-        # Expected: attorney_profiles/StateName/filename.csv
-        if len(parts) > 2:
-            state = parts[1]
-        else:
-            state = "Uncategorized"
-            
+        state = parts[1] if len(parts) > 2 else "Uncategorized"
         if state not in results:
             results[state] = []
         results[state].append(f_clean)
@@ -140,74 +333,52 @@ async def list_results():
 
 
 def get_file(path: str):
-    if S3_BUCKET:
+    """Returns a readable file-like object (StringIO or open file handle)."""
+    if storage_lib.is_cloud():
         try:
-            obj = s3_client.get_object(Bucket=S3_BUCKET, Key=path)
-            f = io.StringIO(obj['Body'].read().decode('utf-8'))
-        except s3_client.exceptions.NoSuchKey:
-            raise HTTPException(status_code=404, detail="S3 file not found")
+            content = storage_lib.read_file(path)
+            return io.StringIO(content.decode("utf-8", errors="ignore"))
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="File not found in cloud storage")
     else:
         if not is_safe_path(path) or not os.path.exists(path):
             raise HTTPException(status_code=404, detail="File not found")
-        f = open(path, encoding="utf-8", errors="ignore")
-        
-    return f
+        return open(path, encoding="utf-8", errors="ignore")
 
 
 @app.get("/results/view")
 async def view_result(path: str = Query(...)):
     """Reads a CSV file and returns the data as JSON."""
     try:
-        
         f = get_file(path)
-        headers = ["S.No", "Name", "Phone", "Email", "Profile URL", "Company", "City", "State", "Verified By"]
+        ui_headers = ["S.No", "Name", "Phone", "Email", "Profile URL", "Company", "City", "State", "Verified By"]
         data = []
-        
+
         with csv_file_lock:
-            reader = csv.reader(f)
-            count = 0
+            reader = csv.DictReader(f)
+
             for row in reader:
-                # Skip empty rows or rows that are just commas/whitespace
-                if not row or all(not cell.strip() for cell in row): continue
                 entry = {}
-                entry["S.No"] = 1 + count
-                row_index = 0
-                for index in range(1, len(headers)):
-                    # Logic to handle missing "Verified By" column gracefully in memory
-                    if row_index < len(row) and row[row_index] in headers:
-                        entry = {}
-                        break
-                    if index == len(headers) - 1 and (row_index >= len(row) or row_index == len(row) - 1 and row[row_index] == ""):
-                        entry[headers[index]] = "verified by smtp"
-                    elif row_index < len(row):
-                        # Skip boolean artifacts if present
-                        if row[row_index] in (True, False, "True", "False") and row_index + 1 < len(row):
-                            row_index += 1
-                        entry[headers[index]] = row[row_index]
-                        row_index += 1
-                    else:
-                        entry[headers[index]] = ""  
-                if entry:
-                    count += 1
-                    data.append(entry)
+                entry["S.No"] = len(data) + 1
+                entry["Name"] = row.get("Name", "")
+                entry["Phone"] = row.get("Phone", "")
+                entry["Email"] = row.get("Email", "")
+                entry["Profile URL"] = row.get("Profile URL", "")
+                entry["Company"] = row.get("Company", row.get("Firm Name", ""))
+                entry["City"] = row.get("City", "")
+                entry["State"] = row.get("State", "")
+                entry["Verified By"] = row.get("Verified By", "verified by smtp")
+                data.append(entry)
 
+            f.close()
 
-            if S3_BUCKET and data:
+            if data:
                 output = io.StringIO()
                 writer = csv.writer(output)
-                writer.writerow(headers[1:]) # MUST write headers back
+                writer.writerow(ui_headers[1:])
                 for row in data:
-                    # Convert dict values to list, skipping S.No which is for UI only
                     writer.writerow(list(row.values())[1:])
-                s3_client.put_object(Bucket=S3_BUCKET, Key=path, Body=output.getvalue().encode('utf-8'))
-            elif not S3_BUCKET and data:
-                with open(path, mode="w", encoding="utf-8", newline='') as f_out:
-                    writer = csv.writer(f_out)
-                    writer.writerow(headers[1:]) # MUST write headers back
-                    # Write existing rows (skipping S.No added for UI)
-                    for row in data:
-                        writer.writerow(list(row.values())[1:])
-        
+                storage_lib.write_file(path, output.getvalue())
 
         return data
 
@@ -217,122 +388,88 @@ async def view_result(path: str = Query(...)):
 @app.get("/results/download")
 async def download_result(path: str = Query(...)):
     """Serves the CSV file for download."""
-    if S3_BUCKET:
+    if storage_lib.is_cloud():
         try:
-            obj = s3_client.get_object(Bucket=S3_BUCKET, Key=path)
+            content = storage_lib.read_file(path)
             return StreamingResponse(
-                io.BytesIO(obj['Body'].read()),
+                io.BytesIO(content),
                 media_type="text/csv",
                 headers={"Content-Disposition": f"attachment; filename={os.path.basename(path)}"}
             )
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="File not found in cloud storage")
         except Exception as e:
-            raise HTTPException(status_code=404, detail=f"S3 File not found: {str(e)}")
+            raise HTTPException(status_code=500, detail=str(e))
     else:
         if not is_safe_path(path) or not os.path.exists(path):
             raise HTTPException(status_code=404, detail="File not found")
         return FileResponse(path, filename=os.path.basename(path))
 
 @app.get("/results/uploaded")
-async def list_uploaded():
-    """Lists all CSV files found in the attorney_profiles/uploaded directory."""
-    if S3_BUCKET:
-        try:
-            resp = s3_client.list_objects_v2(Bucket=S3_BUCKET, Prefix="attorney_profiles/uploaded/")
-            files = [obj['Key'] for obj in resp.get('Contents', []) if obj['Key'].endswith('.csv')]
-            return {"files": files}
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"S3 Error: {str(e)}")
-    else:
-        files = glob.glob("attorney_profiles/uploaded/*.csv")
-        files.sort(key=os.path.getmtime, reverse=True)
-    return {"files": [f.replace("\\", "/") for f in files]}
+async def list_uploaded(folder: str = Query(default="attorney_profiles")):
+    """Lists all CSV files found in the specified uploaded directory."""
+    files_info = storage_lib.list_files(f"{folder}/uploaded/")
+    return {"files": [obj["Key"] for obj in files_info]}
 
 @app.post("/results/upload")
-async def upload_leads(file: UploadFile = File(...)):
+async def upload_leads(file: UploadFile = File(...), folder: str = Query(default="attorney_profiles")):
     """Uploads a leads CSV file, validates its structure, and saves it."""
     if not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only CSV files are allowed.")
 
-    file_path = None
-    s3_path = None
+    upload_path = None
     try:
         content = await file.read()
-        if S3_BUCKET:
-            s3_path = f"attorney_profiles/uploaded/{file.filename}"
-            s3_client.put_object(Bucket=S3_BUCKET, Key=s3_path, Body=content)
+
+        # Determine upload path for both cloud and local
+        if storage_lib.is_cloud():
+            upload_path = f"{folder}/uploaded/{file.filename}"
         else:
-            upload_dir = Path("attorney_profiles/uploaded")
+            upload_dir = Path(folder) / "uploaded"
             upload_dir.mkdir(parents=True, exist_ok=True)
-            file_path = upload_dir / file.filename
-            with file_path.open("wb") as buffer:
-                buffer.write(content)
+            upload_path = str(upload_dir / file.filename).replace("\\", "/")
+
+        storage_lib.write_file(upload_path, content)
 
         # Validate CSV content
         if not content or len(content.strip()) == 0:
             raise HTTPException(status_code=400, detail="The uploaded CSV file is empty.")
-        
+
         df = pd.read_csv(io.BytesIO(content))
 
         all_cols = ["Name", "Phone", "Email", "Profile URL", "Company", "City", "State", "Verified By"]
         compulsory_cols = ["Name", "Email", "Profile URL", "Company", "City", "State", "Verified By"]
-        
-        # 1. Validate Header Structure
+
         missing_headers = [col for col in all_cols if col not in df.columns]
         if missing_headers:
-            if S3_BUCKET:
-                s3_client.delete_object(Bucket=S3_BUCKET, Key=s3_path)
-            else:
-                os.remove(file_path)
+            storage_lib.delete_file(upload_path)
             raise HTTPException(status_code=400, detail=f"Invalid structure. Missing columns: {', '.join(missing_headers)}")
-            
-        # 2. Validate Compulsory Data (Everything except Phone)
-        # Check for nulls or empty strings in compulsory columns
+
         is_empty = df[compulsory_cols].isna() | (df[compulsory_cols].astype(str).apply(lambda x: x.str.strip()) == "")
         if is_empty.any().any():
-            if S3_BUCKET:
-                s3_client.delete_object(Bucket=S3_BUCKET, Key=s3_path)
-            else:
-                os.remove(file_path)
+            storage_lib.delete_file(upload_path)
             raise HTTPException(status_code=400, detail="Validation failed. Mandatory fields (Name, Email, URL, Company, City, State, Verified By) cannot be empty.")
-            
+
         return {"message": f"File '{file.filename}' uploaded successfully.", "rows": len(df)}
     except Exception as e:
         if isinstance(e, HTTPException):
             raise e
-        if not S3_BUCKET and file_path and file_path.exists():
-            os.remove(file_path)
-        elif S3_BUCKET and s3_path:
-            try: s3_client.delete_object(Bucket=S3_BUCKET, Key=s3_path)
+        if upload_path:
+            try: storage_lib.delete_file(upload_path)
             except: pass
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/results/consolidated")
-async def list_consolidated():
-    """Lists all CSV files found in the attorney_profiles/consolidated directory."""
-    if S3_BUCKET:
-        resp = s3_client.list_objects_v2(Bucket=S3_BUCKET, Prefix="attorney_profiles/consolidated/")
-        files = [obj['Key'] for obj in resp.get('Contents', []) if obj['Key'].endswith('.csv')]
-        return {"files": files}
-
-    files = glob.glob("attorney_profiles/consolidated/*.csv")
-    files.sort(key=os.path.getmtime, reverse=True)
-    return {"files": [f.replace("\\", "/") for f in files]}
+async def list_consolidated(folder: str = Query(default="attorney_profiles")):
+    """Lists all CSV files found in the specified consolidated directory."""
+    files_info = storage_lib.list_files(f"{folder}/consolidated/")
+    return {"files": [obj["Key"] for obj in files_info]}
 
 @app.get("/results/saved")
-async def list_saved():
-    """Lists all CSV files in the saved directory."""
-    if S3_BUCKET:
-        try:
-            resp = s3_client.list_objects_v2(Bucket=S3_BUCKET, Prefix="attorney_profiles/saved/")
-            contents = sorted(resp.get('Contents', []), key=lambda x: x['LastModified'])
-            files = [obj['Key'] for obj in contents if obj['Key'].endswith('.csv')]
-            return {"files": files}
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
-            
-    files = glob.glob("attorney_profiles/saved/*.csv")
-    files.sort(key=os.path.getmtime, reverse=False)
-    return {"files": [f.replace("\\", "/") for f in files]}
+async def list_saved(folder: str = Query(default="attorney_profiles")):
+    """Lists all CSV files in the specified saved directory."""
+    files_info = storage_lib.list_files(f"{folder}/saved/", sort_by_time=True)
+    return {"files": [obj["Key"] for obj in files_info]}
 
 @app.post("/jobs/{job_id}/save")
 async def save_job_results(job_id: str):
@@ -341,56 +478,39 @@ async def save_job_results(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
     helper = active_jobs[job_id]
     leads = helper.status.get("recent_leads", [])
+    folder = helper.config.get("folder_name", "attorney_profiles")
     if not leads:
         return {"message": "No leads found to save yet."}
-    
+
     df = pd.DataFrame(leads)
     filename = f"job_result_{helper.state}_{int(time.time())}.csv"
-    
-    if S3_BUCKET:
-        s3_path = f"attorney_profiles/saved/{filename}"
-        csv_buffer = io.StringIO()
-        df.to_csv(csv_buffer, index=False)
-        s3_client.put_object(Bucket=S3_BUCKET, Key=s3_path, Body=csv_buffer.getvalue().encode('utf-8'))
-    else:
-        save_dir = Path("attorney_profiles/saved")
-        save_dir.mkdir(parents=True, exist_ok=True)
-        df.to_csv(save_dir / filename, index=False)
-        
+    save_path = f"{folder}/saved/{filename}"
+
+    csv_buffer = io.StringIO()
+    df.to_csv(csv_buffer, index=False)
+    storage_lib.write_file(save_path, csv_buffer.getvalue())
+
     return {"message": f"Saved {len(leads)} leads to {filename}"}
 
 class ConsolidateRequest(BaseModel):
     filename: str = "attorney_profiles_master"
     include_uploaded: bool = False
+    folder: str = "attorney_profiles"
 
 @app.post("/results/consolidate")
 async def consolidate_results(request: ConsolidateRequest):
     """Merges CSV files into a master file with custom naming and optional upload inclusion."""
+    folder_path = request.folder
+    files_info = storage_lib.list_files(f"{folder_path}/")
+
     files_to_process = []
-    if S3_BUCKET:
-        resp = s3_client.list_objects_v2(Bucket=S3_BUCKET, Prefix="attorney_profiles/")
-        contents = resp.get('Contents', [])
-        
-        for obj in contents:
-            key = obj['Key']
-            if not key.endswith('.csv'): continue
-            parts = key.split('/')
-            if all(x not in parts for x in ["uploaded", "consolidated", "saved"]):
-                files_to_process.append(key)
-            elif request.include_uploaded and "uploaded" in parts:
-                files_to_process.append(key)
-    else:
-        folder_path = "attorney_profiles"
-        # Identify Generated Files
-        generated_files = glob.glob(f"{folder_path}/**/*.csv", recursive=True)
-        generated_files = [f for f in generated_files if "uploaded" not in f.replace("\\", "/").split("/") and "consolidated" not in f.replace("\\", "/").split("/")]
-        
-        files_to_process = generated_files
-        
-        # Optionally include Uploaded Files
-        if request.include_uploaded:
-            uploaded_files = glob.glob(f"{folder_path}/uploaded/*.csv")
-            files_to_process.extend(uploaded_files)
+    for obj in files_info:
+        key = obj["Key"].replace("\\", "/")
+        parts = key.split("/")
+        if all(x not in parts for x in ["uploaded", "consolidated", "saved"]):
+            files_to_process.append(key)
+        elif request.include_uploaded and "uploaded" in parts:
+            files_to_process.append(key)
 
     if not files_to_process:
         return {"message": "No files found to consolidate."}
@@ -402,7 +522,6 @@ async def consolidate_results(request: ConsolidateRequest):
                 reader = csv.reader(f)
                 file_rows = list(reader)
                 if not file_rows: continue
-                # Skip header if present
                 start_idx = 1 if file_rows[0] and file_rows[0][0] == "Name" else 0
                 data.extend(file_rows[start_idx:])
 
@@ -425,14 +544,7 @@ async def consolidate_results(request: ConsolidateRequest):
         row_to_write = list(row) + [""] * (len(header) - len(row))
         writer.writerow(row_to_write[:len(header)])
 
-    if S3_BUCKET:
-        s3_path = f"attorney_profiles/consolidated/{clean_name}"
-        s3_client.put_object(Bucket=S3_BUCKET, Key=s3_path, Body=output.getvalue().encode('utf-8'))
-    else:
-        out_dir = Path("attorney_profiles/consolidated")
-        out_dir.mkdir(parents=True, exist_ok=True)
-        with open(out_dir / clean_name, mode="w", encoding="utf-8", newline='') as file:
-            file.write(output.getvalue())
+    storage_lib.write_file(f"{folder_path}/consolidated/{clean_name}", output.getvalue())
 
     return {"message": f"Consolidated {len(files_to_process)} files into {clean_name}. Total unique leads: {len(consolidated_data)}."}
 
@@ -444,10 +556,10 @@ class ScrapeRequest(BaseModel):
     cities: List[str] = []
     base_query: str = "medical malpractice and personal injury lawyers"
     target: int = 10
+    config_id: str = "attorney"
 
 @app.on_event("startup")
 async def startup_event():
-    # Any startup tasks can go here
     pass
 
 @app.on_event("shutdown")
@@ -459,9 +571,15 @@ async def shutdown_event_handler():
 def run_job_logic(job_id: str, request: ScrapeRequest):
     """Replicates the main loop and run_city logic from lead_generation_script_2.py"""
     helper = active_jobs[job_id]
+
+    # Load configuration
+    config_path = CONFIG_DIR / f"{request.config_id}.json"
+    if config_path.exists():
+        with open(config_path, 'r') as f:
+            helper.config = json.load(f)
+
     helper.status["total_cities"] = len(request.cities)
     helper.status["phase"] = "Initializing workers"
-    # Initialize per-city status tracking
     for city in request.cities:
         helper.status["cities"][city] = {
             "phase": "Pending",
@@ -470,7 +588,7 @@ def run_job_logic(job_id: str, request: ScrapeRequest):
             "leads_found": 0,
             "progress": 0
         }
-    
+
     domains_with_no_leads = set()
     log_path = helper.log_path
 
@@ -479,16 +597,14 @@ def run_job_logic(job_id: str, request: ScrapeRequest):
             if shutdown_event.is_set() or helper.cancel_event.is_set(): return
             time.sleep(1)
 
-    # Start worker threads (matching scripts counts)
+    # Start worker threads
     threads = []
     for _ in range(4):
-        # 4 Firm workers as per script
         threads.append(threading.Thread(target=helper.firm_worker, daemon=True))
 
     threads.append(threading.Thread(target=helper.csv_writer, daemon=True))
     threads.append(threading.Thread(target=helper.monitor, daemon=True))
-    
-    # 10 Email workers as per script
+
     for _ in range(10):
         threads.append(threading.Thread(target=helper.email_worker, daemon=True))
 
@@ -500,36 +616,34 @@ def run_job_logic(job_id: str, request: ScrapeRequest):
       for i, city in enumerate(request.cities):
         if shutdown_event.is_set() or helper.cancel_event.is_set():
             break
-            
+
         helper.city = city
         helper.state = request.state
         helper.status["current_city"] = city
         helper.status["cities"][city]["phase"] = "Gathering Firms"
         helper.status["phase"] = f"Processing {city}"
-        
+
         helper.domains_with_no_leads = domains_with_no_leads
         helper.gathered_domain_names = get_domain_names()
         helper.gathered_profile_names = get_lead_profile_names()
 
         query = f"{request.base_query} in {city}, {request.state}"
-        
+
         def firm_status_callback(count, target):
             helper.status["firms_discovered"] = count
             helper.status["firms_target"] = target
             helper.status["cities"][city]["firms_found"] = count
-            # Discovery is 40% of city progress
             discovery_progress = min(100, (count / target) * 100) * 0.4
             helper.status["cities"][city]["progress"] = round(discovery_progress, 1)
 
-            # Progress: Cities done + (This city discovery weight 40%)
             city_base = (i / len(request.cities)) * 100
             discovery_share = (count / target) * (100 / len(request.cities)) * 0.4
             helper.status["overall_progress"] = round(city_base + discovery_share, 2)
 
         log(f"--- Starting API Job: {city}, {request.state} ---", log_path)
         firms = FirmParser(log_path=log_path).scrape_google_places(
-            query, 
-            request.target, 
+            query,
+            request.target,
             status_callback=firm_status_callback,
             cancel_event=helper.cancel_event
         )
@@ -544,32 +658,26 @@ def run_job_logic(job_id: str, request: ScrapeRequest):
         helper.status["cities"][city]["phase"] = "Gathering Firms Complete"
         helper.status["cities"][city]["firms_found"] = len(firms)
 
-        # Save firms detail as script does
+        # Save firms detail via storage abstraction
         file_key = f"Firms_details/google_places_firms_{city}_{request.state}.csv"
-        if S3_BUCKET:
-            csv_buffer = io.StringIO()
-            pd.DataFrame(firms).to_csv(csv_buffer, index=False)
-            s3_client.put_object(Bucket=S3_BUCKET, Key=file_key, Body=csv_buffer.getvalue().encode('utf-8'))
-        else:
-            os.makedirs("Firms_details", exist_ok=True)
-            pd.DataFrame(firms).to_csv(file_key, index=False)
+        csv_buffer = io.StringIO()
+        pd.DataFrame(firms).to_csv(csv_buffer, index=False)
+        storage_lib.write_file(file_key, csv_buffer.getvalue())
 
         helper.status["cities"][city]["phase"] = "Extracting Leads"
         helper.status["firms_total"] = len(firms)
 
-        # Track leads found for this city specifically
         start_leads = helper.status["profiles_found"]
         for firm in firms:
             if helper.cancel_event.is_set(): break
             helper.firm_queue.put(firm)
 
-        # Wait for queues to empty with shutdown awareness
         wait_for_queue(helper.firm_queue)
         if shutdown_event.is_set(): break
-        
+
         wait_for_queue(helper.profile_queue)
         if shutdown_event.is_set(): break
-        
+
         wait_for_queue(helper.result_queue)
         if shutdown_event.is_set(): break
 
@@ -577,12 +685,11 @@ def run_job_logic(job_id: str, request: ScrapeRequest):
         helper.status["cities"][city]["phase"] = "Done"
         helper.status["cities"][city]["progress"] = 100
 
-        # Update persistent empty domains set from the helper's session cache
         with helper.domain_with_no_profiles_cache_lock:
             for domain, has_no_profiles in helper.domain_with_no_profiles_cache.items():
                 if has_no_profiles:
                     domains_with_no_leads.add(domain)
-        
+
         helper.status["cities_completed"] += 1
         helper.status["overall_progress"] = round((helper.status["cities_completed"] / len(request.cities)) * 100, 2)
 
@@ -590,34 +697,28 @@ def run_job_logic(job_id: str, request: ScrapeRequest):
         helper.status["phase"] = "Error"
         log(f"Job {job_id} encountered error: {e}")
     finally:
-        # Determine transitional phase for the UI
         if helper.cancel_event.is_set():
             helper.status["phase"] = "Terminating... Cleaning Up"
         else:
             helper.status["phase"] = "Finishing... Cleaning Up"
 
-        # Signal workers to exit
-        # Send one sentinel per worker thread started
         for _ in range(4):
             helper.firm_queue.put(None)
-            
+
         for _ in range(10):
             helper.profile_queue.put(None)
-            
+
         helper.result_queue.put(None)
-        helper.monitor_queue.put(None) # Signal monitor to stop
-        
-        # Quick final join
+        helper.monitor_queue.put(None)
+
         wait_for_queue(helper.firm_queue)
         wait_for_queue(helper.profile_queue)
         wait_for_queue(helper.result_queue)
 
-        # Join threads to wait for current tasks to finish observing the cancel signal
         if hasattr(helper, 'threads'):
             for t in helper.threads:
                 t.join(timeout=1)
 
-        # Set final status
         if helper.cancel_event.is_set():
             helper.status["phase"] = "Cancelled"
         elif helper.status["phase"] != "Error":
@@ -625,40 +726,40 @@ def run_job_logic(job_id: str, request: ScrapeRequest):
 
         # Auto-save results on completion or termination
         leads = helper.status.get("recent_leads", [])
+        folder = helper.config.get("folder_name", "attorney_profiles")
         if leads:
             try:
                 df = pd.DataFrame(leads)
                 filename = f"auto_save_{helper.state}_{job_id[:8]}_{int(time.time())}.csv"
-                if S3_BUCKET:
-                    s3_path = f"attorney_profiles/saved/{filename}"
-                    csv_buffer = io.StringIO()
-                    df.to_csv(csv_buffer, index=False)
-                    s3_client.put_object(Bucket=S3_BUCKET, Key=s3_path, Body=csv_buffer.getvalue().encode('utf-8'))
-                else:
-                    save_dir = Path("attorney_profiles/saved")
-                    save_dir.mkdir(parents=True, exist_ok=True)
-                    df.to_csv(save_dir / filename, index=False)
+                save_path = f"{folder}/saved/{filename}"
+                csv_buffer = io.StringIO()
+                df.to_csv(csv_buffer, index=False)
+                storage_lib.write_file(save_path, csv_buffer.getvalue())
                 log(f"Auto-saved {len(leads)} leads to {filename}", log_path)
             except Exception as e:
                 log(f"Auto-save failed for job {job_id}: {e}", log_path)
 
-    # We keep the job in active_jobs for 1 minute after completion so UI can show final status
     log(f"Job {job_id} finished. Phase: {helper.status['phase']}", log_path)
     time.sleep(5)
     active_jobs.pop(job_id, None)
 
 @app.post("/jobs/start")
 async def start_job(request: ScrapeRequest, background_tasks: BackgroundTasks):
-    # Check if a job for this state is already running to prevent overlap
     if any(j.state == request.state for j in active_jobs.values()):
         raise HTTPException(status_code=400, detail="A job for this state is already running.")
-        
+
+    config_path = CONFIG_DIR / f"{request.config_id}.json"
+    config = None
+    if config_path.exists():
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+
     job_id = str(uuid.uuid4())
-    helper = LeadGenerationHelper(state=request.state)
-    
+    helper = LeadGenerationHelper(state=request.state, config=config)
+
     active_jobs[job_id] = helper
     background_tasks.add_task(run_job_logic, job_id, request)
-    
+
     return {"job_id": job_id, "message": "Scraping job started successfully"}
 
 @app.post("/jobs/{job_id}/cancel")
@@ -666,16 +767,15 @@ async def cancel_job(job_id: str):
     """Cancels a running job."""
     if job_id not in active_jobs:
         raise HTTPException(status_code=404, detail="Job not found")
-    
+
     helper = active_jobs[job_id]
     helper.cancel_event.set()
     helper.status["phase"] = "Cancelling"
-    
-    # Sentinel signals to break worker blocks
+
     for _ in range(10): helper.firm_queue.put(None)
     for _ in range(20): helper.profile_queue.put(None)
     helper.result_queue.put(None)
-    
+
     return {"message": "Cancellation request received."}
 
 @app.get("/jobs/{job_id}/status")
@@ -705,7 +805,6 @@ async def get_active_jobs():
 
 if __name__ == "__main__":
     import uvicorn
-    if S3_BUCKET:
-        uvicorn.run(app, host="0.0.0.0", port=8000)
-    else:
-        uvicorn.run(app, host="127.0.0.1", port=8000)
+    # Bind to all interfaces when running in cloud, localhost-only otherwise
+    host = "0.0.0.0" if storage_lib.is_cloud() else "127.0.0.1"
+    uvicorn.run(app, host=host, port=8000)

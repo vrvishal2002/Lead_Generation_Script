@@ -1,41 +1,21 @@
 import re
 import copy
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, unquote
 import name_processor_lib
 import soup_content_lib 
-import name_processor_lib
 from log_lib import log
-
-
-keywords_for_attorney_profiles = keywords = [
-    "personal injury",
-    "medical malpractice",
-    "medical negligence",
-    "wrongful death",
-    "accident",
-    "dog bite",
-    "drug"
-]
-
-DIRECTORY_KEYWORDS = [
-    "attorneys",
-    "our-team",
-    "team",
-    "legal-team",
-    "lawyers",
-    "meet",
-    "profiles",
-    "about",
-    "people",
-    "paralegals",
-    "advocates"
-]
 
 
 class ProfileProcessingHelper:
 
-    def __init__(self, log_path=None):
+    def __init__(self, log_path=None, config=None):
         self.log_path = log_path
+        self.config = config or {}
+        self.profile_keywords = self.config.get("profile_required_keywords", [])
+        self.directory_keywords = self.config.get("directory_keywords", [])
+        self.role_keywords = self.config.get("lead_role_keywords", [])
+        self.slug_exclusions = self.config.get("slug_exclusion_keywords", [])
+        
         name_processor_lib.log_path = log_path
         soup_content_lib.log_path = log_path
 
@@ -63,11 +43,11 @@ class ProfileProcessingHelper:
                 name = " ".join(full.split('/')[-1].split('-'))
             else:
                 name =" ".join(full.split('/')[-2].split('-'))
-            name = name_processor_lib.normalize_name(name)
+            name = name_processor_lib.normalize_name(name, self.slug_exclusions)
 
             if (urlparse(home_url).netloc in urlparse(full).netloc or \
                 urlparse(full).netloc in urlparse(home_url).netloc) and \
-                name_processor_lib.looks_like_name(name) and name_processor_lib.is_profile_slug(full):
+                name_processor_lib.looks_like_name(name) and name_processor_lib.is_profile_slug(full, blacklist=self.directory_keywords):
                 profile_links.append(full)
 
         return list(set(profile_links))
@@ -116,18 +96,18 @@ class ProfileProcessingHelper:
     # PROFILE EXTRACTION
     # =====================================================
 
-    def extract_profile(self, url):
+    def extract_profile(self, url, firm_name=""):
         soup = soup_content_lib.get_soup(url)
         if not soup:
             return None
 
         soup = soup_content_lib.clean_dom(soup)
         body_text = soup.get_text(separator=" ", strip=True).lower()
-        if not any(keyword in body_text for keyword in keywords_for_attorney_profiles):
-            log("Not personal injury Attorney", self.log_path)
+        if self.profile_keywords and not any(keyword.lower() in body_text for keyword in self.profile_keywords):
+            log(f"Profile does not match required keywords: {self.profile_keywords}", self.log_path)
             return None
-        if not any(keyword in body_text for keyword in ('paralegal', 'advocate', 'lawyer', 'attorney')):
-            log("Personal injury domain. But not Attorney", self.log_path)
+        if self.role_keywords and not any(keyword.lower() in body_text for keyword in self.role_keywords):
+            log(f"Profile does not match required roles: {self.role_keywords}", self.log_path)
             return None
         main = self.get_main_content_profile(soup)
 
@@ -154,8 +134,8 @@ class ProfileProcessingHelper:
                             name = ""
                             break
             if name:
-                name_in_page = name_processor_lib.normalize_name(name)
-                name_in_link = name_processor_lib.normalize_name(url.strip('/').split('/')[-1])
+                name_in_page = name_processor_lib.normalize_name(name, exclusions=self.slug_exclusions)
+                name_in_link = name_processor_lib.normalize_name(url.strip('/').split('/')[-1].split('.')[0], exclusions=self.slug_exclusions)
                 if not name_processor_lib.names_match(name_in_page, name_in_link):
                     if all(w in text for w in name_in_link.split()):
                         log(f"Name in h1: {name_in_page} doesn't match name in url: {name_in_link} for {url}, but all words are in page text. Using name from url.", self.log_path)
@@ -177,13 +157,14 @@ class ProfileProcessingHelper:
         if email and not name_processor_lib.is_strong_name_word(email.split('@')[0]):
             email = ""
 
+        normalized_name = name_processor_lib.normalize_name(name, self.slug_exclusions)
+
         return {
-            "Name": name_processor_lib.normalize_name(name),
+            "Name": normalized_name,
             "Phone": phone,
             "Email": email,
             "Profile URL": url
         }
-    
 
     def get_profile_name_from_text(self, text, title_keywords):
 
@@ -216,14 +197,14 @@ class ProfileProcessingHelper:
         return None
 
 
-    def extract_team_profiles(self, soup, url):
+    def extract_team_profiles(self, soup, url, firm_name=""):
         profiles = []
 
         # Common tags that hold cards
         candidate_tags = soup.find_all(["div", "section", "li", "h2", "h1", "p"])
-
-        name_pattern = re.compile(r'^[A-Z][a-z]+(?:\s[A-Z][a-z]+)+')  # John Doe
-        title_keywords = ["associate", "attorney", "advocate", "lawyer", "partner", "paralegal", "legal", "about", "esq.", "of counsel", "senior", "principal"]
+        
+        # Combine industry roles with generic organizational titles
+        title_keywords = list(set(self.role_keywords + ["about", "senior", "principal", "associate", "founder", "owner"]))
 
         for tag in candidate_tags:
             text = tag.get_text(" ", strip=True)
@@ -246,9 +227,11 @@ class ProfileProcessingHelper:
 
             phone_match = re.search(r'\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}', text)
             phone = phone_match.group() if phone_match else ""
+            
+            normalized_name = name_processor_lib.normalize_name(name, exclusions=self.slug_exclusions)
 
             profiles.append({
-                "Name": name_processor_lib.normalize_name(name),
+                "Name": normalized_name,
                 "Phone": phone,
                 "Email": email,
                 "Profile URL": url

@@ -1,0 +1,56 @@
+{
+    "id": "mba_prof",
+    "name": "MBA Professor",
+    "folder_name": "mba_prof_profiles",
+    "file_prefix": "MBAP",
+    "default_query": "\"MBA Professor\" site:linkedin.com/in",
+    "directory_keywords": [
+        "faculty",
+        "staff",
+        "professors",
+        "business-school",
+        "academia",
+        "people",
+        "directory",
+        "department-directory"
+    ],
+    "profile_required_keywords": [
+        "MBA",
+        "Professor",
+        "Business School",
+        "University",
+        "Management",
+        "Faculty",
+        "Graduate School"
+    ],
+    "lead_role_keywords": [
+        "Assistant Professor",
+        "Associate Professor",
+        "Adjunct Professor",
+        "Clinical Professor",
+        "Professor of Practice",
+        "Professor of Management",
+        "Dean",
+        "Chair of Department"
+    ],
+    "slug_exclusion_keywords": [
+        "jobs",
+        "login",
+        "signup",
+        "company",
+        "groups",
+        "events",
+        "posts",
+        "help",
+        "pulse",
+        "privacy"
+    ],
+    "disposable_exclusion": [
+        "mailinator.com",
+        "tempmail.com",
+        "yopmail.com",
+        "guerrillamail.com",
+        "10minutemail.com",
+        "throwawaymail.com"
+    ]
+}
