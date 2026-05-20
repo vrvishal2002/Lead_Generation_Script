@@ -33,15 +33,16 @@ def log(message, log_path=None):
         return
 
     if storage_lib.is_cloud():
-        try:
-            # Cloud storage has no native append — read, append, re-upload.
+        with log_lock:
             try:
-                existing = storage_lib.read_file(log_path).decode("utf-8")
-            except FileNotFoundError:
-                existing = ""
-            storage_lib.write_file(log_path, existing + log_message + "\n")
-        except Exception as e:
-            print(f"[{storage_lib.get_backend().upper()}] Logging Error for {log_path}: {e}")
+                # Cloud storage has no native append — read, append, re-upload.
+                try:
+                    existing = storage_lib.read_file(log_path).decode("utf-8")
+                except FileNotFoundError:
+                    existing = ""
+                storage_lib.write_file(log_path, existing + log_message + "\n")
+            except Exception as e:
+                print(f"[{storage_lib.get_backend().upper()}] Logging Error for {log_path}: {e}")
     else:
         with log_lock:
             with open(log_path, "a", encoding="utf-8") as f:

@@ -717,9 +717,12 @@ def run_job_logic(job_id: str, request: ScrapeRequest):
 
         # Save firms detail via storage abstraction
         file_key = f"Firms_details/google_places_firms_{city}_{request.state}.csv"
-        csv_buffer = io.StringIO()
-        pd.DataFrame(firms).to_csv(csv_buffer, index=False)
-        storage_lib.write_file(file_key, csv_buffer.getvalue())
+        try:
+            csv_buffer = io.StringIO()
+            pd.DataFrame(firms).to_csv(csv_buffer, index=False)
+            storage_lib.write_file(file_key, csv_buffer.getvalue())
+        except Exception as e:
+            log(f"Job {job_id} — failed to save firms CSV for {city}: {e}", log_path)
 
         helper.status["cities"][city]["phase"] = "Extracting Leads"
         helper.status["firms_total"] = len(firms)
@@ -730,13 +733,13 @@ def run_job_logic(job_id: str, request: ScrapeRequest):
             helper.firm_queue.put(firm)
 
         wait_for_queue(helper.firm_queue)
-        if shutdown_event.is_set(): break
+        if shutdown_event.is_set() or helper.cancel_event.is_set(): break
 
         wait_for_queue(helper.profile_queue)
-        if shutdown_event.is_set(): break
+        if shutdown_event.is_set() or helper.cancel_event.is_set(): break
 
         wait_for_queue(helper.result_queue)
-        if shutdown_event.is_set(): break
+        if shutdown_event.is_set() or helper.cancel_event.is_set(): break
 
         helper.status["cities"][city]["leads_found"] = helper.status["profiles_found"] - start_leads
         helper.status["cities"][city]["phase"] = "Done"
@@ -752,7 +755,7 @@ def run_job_logic(job_id: str, request: ScrapeRequest):
 
     except Exception as e:
         helper.status["phase"] = "Error"
-        log(f"Job {job_id} encountered error: {e}")
+        log(f"Job {job_id} encountered error: {e}", log_path)
     finally:
         if helper.cancel_event.is_set():
             helper.status["phase"] = "Terminating... Cleaning Up"
