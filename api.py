@@ -448,7 +448,14 @@ async def upload_leads(file: UploadFile = File(...), folder: str = Query(default
         is_empty = df[compulsory_cols].isna() | (df[compulsory_cols].astype(str).apply(lambda x: x.str.strip()) == "")
         if is_empty.any().any():
             storage_lib.delete_file(upload_path)
-            raise HTTPException(status_code=400, detail="Validation failed. Mandatory fields (Name, Email, URL, Company, City, State, Verified By) cannot be empty.")
+            bad_rows = is_empty.any(axis=1)
+            bad_cols = is_empty.columns[is_empty.any(axis=0)].tolist()
+            sample_rows = (df[bad_rows].index[:5] + 2).tolist()  # +2: 1 for header, 1 for 1-based
+            raise HTTPException(status_code=400, detail=(
+                f"Validation failed. Empty values found in mandatory columns: {', '.join(bad_cols)}. "
+                f"First affected rows (CSV line numbers): {sample_rows}. "
+                f"Total affected rows: {int(bad_rows.sum())}."
+            ))
 
         return {"message": f"File '{file.filename}' uploaded successfully.", "rows": len(df)}
     except Exception as e:
@@ -496,6 +503,56 @@ class ConsolidateRequest(BaseModel):
     filename: str = "attorney_profiles_master"
     include_uploaded: bool = False
     folder: str = "attorney_profiles"
+
+class ConsolidateUploadedRequest(BaseModel):
+    filename: str = "uploaded_profiles_master"
+    folder: str = "attorney_profiles"
+
+@app.post("/results/consolidate-uploaded")
+async def consolidate_uploaded(request: ConsolidateUploadedRequest):
+    """Merges all uploaded CSV files into a master file saved in consolidated/."""
+    folder_path = request.folder
+    files_info = storage_lib.list_files(f"{folder_path}/uploaded/")
+    files_to_process = [obj["Key"].replace("\\", "/") for obj in files_info]
+
+    if not files_to_process:
+        return {"message": "No uploaded files found to consolidate."}
+
+    data = []
+    for f_path in files_to_process:
+        with csv_file_lock:
+            with get_file(f_path) as f:
+                reader = csv.reader(f)
+                file_rows = list(reader)
+                if not file_rows:
+                    continue
+                start_idx = 1 if file_rows[0] and file_rows[0][0] == "Name" else 0
+                data.extend(file_rows[start_idx:])
+
+    email_set = set()
+    consolidated_data = []
+    for row in data:
+        if not row or len(row) < 3:
+            continue
+        email = row[2].strip().lower()
+        if email not in email_set:
+            consolidated_data.append(row)
+            if email:
+                email_set.add(email)
+
+    header = ["Name", "Phone", "Email", "Profile URL", "Company", "City", "State", "Verified By"]
+    clean_name = request.filename.replace(".csv", "") + ".csv"
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(header)
+    for row in consolidated_data:
+        row_to_write = list(row) + [""] * (len(header) - len(row))
+        writer.writerow(row_to_write[:len(header)])
+
+    storage_lib.write_file(f"{folder_path}/consolidated/{clean_name}", output.getvalue())
+    return {
+        "message": f"Consolidated {len(files_to_process)} uploaded files into {clean_name}. Total unique profiles: {len(consolidated_data)}."
+    }
 
 @app.post("/results/consolidate")
 async def consolidate_results(request: ConsolidateRequest):

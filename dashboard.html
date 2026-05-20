@@ -233,7 +233,13 @@
                 <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
                     <div class="flex justify-between items-center mb-4">
                         <h2 class="text-xl font-semibold text-green-800">Uploaded Profiles</h2>
-                        <button onclick="loadUploadedFiles()" class="text-sm text-blue-600 hover:underline">Refresh</button>
+                        <div class="flex items-center gap-4">
+                            <div class="flex items-center gap-2 bg-gray-50 p-1 px-2 rounded border border-gray-200">
+                                <input type="text" id="uploadedMasterFilename" placeholder="master_name" class="text-xs border-none bg-transparent focus:ring-0 w-32" value="uploaded_profiles_master">
+                                <button onclick="consolidateUploaded()" class="bg-green-600 text-white px-2 py-0.5 rounded hover:bg-green-700 transition text-[10px] font-bold">Consolidate</button>
+                            </div>
+                            <button onclick="loadUploadedFiles()" class="text-sm text-blue-600 hover:underline">Refresh</button>
+                        </div>
                     </div>
                     <div class="overflow-auto max-h-60 border-t border-gray-100">
                         <table class="min-w-full divide-y divide-gray-200">
@@ -920,11 +926,25 @@
             const filename = document.getElementById('masterFilename').value || 'attorney_profiles_master';
             const includeUploaded = document.getElementById('includeUploaded').checked;
             const folder = getSelectedFolder();
-            
-            const res = await fetch('/results/consolidate', { 
+
+            const res = await fetch('/results/consolidate', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ filename, include_uploaded: includeUploaded, folder })
+            });
+            const data = await res.json();
+            alert(data.message);
+            loadConsolidatedFiles();
+        }
+
+        async function consolidateUploaded() {
+            const filename = document.getElementById('uploadedMasterFilename').value || 'uploaded_profiles_master';
+            const folder = getSelectedFolder();
+
+            const res = await fetch('/results/consolidate-uploaded', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ filename, folder })
             });
             const data = await res.json();
             alert(data.message);
