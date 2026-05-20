@@ -86,11 +86,11 @@ spec:
           value: "6"
         resources:
           requests:
-            memory: "1Gi"
+            memory: "2Gi"
             cpu: "250m"
           limits:
-            memory: "2Gi"
-            cpu: "500m"
+            memory: "4Gi"
+            cpu: "1000m"
         readinessProbe:
           httpGet:
             path: /health
