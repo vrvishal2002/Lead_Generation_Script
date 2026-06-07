@@ -6,7 +6,7 @@ from log_lib import log
 
 
 
-class FirmScraper:
+class FirmScraper: 
 
     def __init__(self, log_path=None, config=None):
         self.log_path = log_path
