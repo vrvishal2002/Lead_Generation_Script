@@ -36,7 +36,7 @@ services:
       - selenium-hub
     environment:
       - S3_BUCKET_NAME=lead-gen-data-vishal
-      - AWS_REGION=ap-south-1
+      - AWS_REGION=us-east-1
       - SELENIUM_HUB_URL=http://selenium-hub:4444
       - SELENIUM_DRIVERS_COUNT=6
       - GOOGLE_API_KEY=AIzaSyBNhQK0iONS8JYDrHSPPpbNNpwegaSZgHY
