@@ -69,11 +69,15 @@ jobs:
           ECR_REGISTRY: ${{ steps.build.outputs.ecr_registry }}
           EC2_HOST: ${{ secrets.EC2_HOST }}
         run: |
-          ssh -i ~/.ssh/ec2-key.pem ubuntu@$EC2_HOST bash << EOF
-            set -e
-            aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin $ECR_REGISTRY
-            mkdir -p /home/ubuntu/lead-gen
-            cd /home/ubuntu/lead-gen
-            ECR_IMAGE=$ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:latest docker compose -f docker-compose.aws.yml up -d --force-recreate
-            docker image prune -f
-          EOF
+          ECR_PASSWORD=$(aws ecr get-login-password --region ${{ env.AWS_REGION }})
+          ECR_IMAGE=$ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:latest
+          ssh -i ~/.ssh/ec2-key.pem ubuntu@$EC2_HOST \
+            ECR_PASSWORD="$ECR_PASSWORD" ECR_REGISTRY="$ECR_REGISTRY" ECR_IMAGE="$ECR_IMAGE" \
+            bash -s << 'ENDSSH'
+              set -e
+              echo "$ECR_PASSWORD" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+              mkdir -p /home/ubuntu/lead-gen
+              cd /home/ubuntu/lead-gen
+              ECR_IMAGE="$ECR_IMAGE" docker compose -f docker-compose.aws.yml up -d --force-recreate
+              docker image prune -f
+          ENDSSH
