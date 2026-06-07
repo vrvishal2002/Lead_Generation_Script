@@ -61,15 +61,15 @@ jobs:
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
         run: |
-          ssh ubuntu@$EC2_HOST "mkdir -p /home/ubuntu/lead-gen"
-          scp docker-compose.aws.yml ubuntu@$EC2_HOST:/home/ubuntu/lead-gen/
+          ssh -i ~/.ssh/ec2-key.pem ubuntu@$EC2_HOST "mkdir -p /home/ubuntu/lead-gen"
+          scp -i ~/.ssh/ec2-key.pem docker-compose.aws.yml ubuntu@$EC2_HOST:/home/ubuntu/lead-gen/
 
       - name: Deploy on EC2
         env:
           ECR_REGISTRY: ${{ steps.build.outputs.ecr_registry }}
           EC2_HOST: ${{ secrets.EC2_HOST }}
         run: |
-          ssh ubuntu@$EC2_HOST bash << EOF
+          ssh -i ~/.ssh/ec2-key.pem ubuntu@$EC2_HOST bash << EOF
             set -e
             aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin $ECR_REGISTRY
             mkdir -p /home/ubuntu/lead-gen
