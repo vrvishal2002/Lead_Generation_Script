@@ -242,6 +242,8 @@ class LeadGenerationHelper:
                             existing_df = existing_df.dropna(how="all")
                     except FileNotFoundError:
                         pass
+                    except Exception as read_err:
+                        log(f"csv_writer: could not read existing file {file_path} (starting fresh): {read_err}", log_path)
 
                     final_df = pd.concat([existing_df, df], ignore_index=True)
                     csv_buf = io.StringIO()

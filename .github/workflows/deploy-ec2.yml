@@ -1,0 +1,66 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches: ["main"]
+
+env:
+  AWS_REGION: ap-south-1
+  ECR_REPOSITORY: lead-gen-api
+
+jobs:
+  deploy:
+    name: Build and Deploy
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image to ECR
+        id: build
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker tag  $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          echo "ecr_registry=$ECR_REGISTRY" >> $GITHUB_OUTPUT
+
+      - name: Copy compose file to EC2
+        env:
+          SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          echo "$SSH_KEY" > /tmp/ec2-key.pem
+          chmod 600 /tmp/ec2-key.pem
+          ssh -o StrictHostKeyChecking=no -i /tmp/ec2-key.pem ubuntu@$EC2_HOST "mkdir -p /home/ubuntu/lead-gen"
+          scp -o StrictHostKeyChecking=no -i /tmp/ec2-key.pem docker-compose.aws.yml ubuntu@$EC2_HOST:/home/ubuntu/lead-gen/docker-compose.aws.yml
+
+      - name: Deploy on EC2
+        env:
+          ECR_REGISTRY: ${{ steps.build.outputs.ecr_registry }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          ssh -o StrictHostKeyChecking=no -i /tmp/ec2-key.pem ubuntu@$EC2_HOST << EOF
+            set -e
+            aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin $ECR_REGISTRY
+            cd /home/ubuntu/lead-gen
+            ECR_IMAGE=$ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:latest docker compose -f docker-compose.aws.yml up -d --force-recreate
+            docker image prune -f
+          EOF
+          rm -f /tmp/ec2-key.pem

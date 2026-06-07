@@ -1,0 +1,68 @@
+version: "3.8"
+
+# Oracle Cloud Always Free deployment
+# VM: 1x Ampere A1 (4 OCPU, 24 GB RAM)
+# Storage: Oracle Object Storage (S3-compatible)
+#
+# ── First-time setup ──────────────────────────────────────────────────────────
+# 1. Create an Oracle Cloud account (free): https://cloud.oracle.com/free
+# 2. Create an ARM VM: Compute → Instances → Create (Shape: VM.Standard.A1.Flex, 4 OCPU, 24 GB)
+# 3. Create Object Storage bucket: Storage → Buckets → Create Bucket
+# 4. Get S3-compatible credentials:
+#      Identity → Customers → <your-user> → Customer Secret Keys → Generate
+# 5. Get tenancy namespace:
+#      Profile (top-right) → Tenancy → Object Storage Namespace
+# 6. Fill in the .env file (copy .env.oracle.example to .env and edit)
+# 7. On the VM:
+#      sudo apt update && sudo apt install -y docker.io docker-compose git
+#      git clone <your-repo> && cd lead_generation_script
+#      cp .env.oracle.example .env   # then edit with real values
+#      docker compose -f docker-compose.oracle.yml up -d --build
+#
+# ── Updating ──────────────────────────────────────────────────────────────────
+#   git pull
+#   docker compose -f docker-compose.oracle.yml up -d --build lead-gen-api
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  selenium-hub:
+    image: selenium/hub:4.27.0
+    restart: unless-stopped
+    ports:
+      - "4444:4444"
+      - "4442:4442"
+      - "4443:4443"
+    environment:
+      - SE_GRID_MAX_SESSION=6
+    mem_limit: 512m
+
+  chrome-node:
+    image: selenium/node-chrome:4.27.0
+    restart: unless-stopped
+    depends_on:
+      - selenium-hub
+    shm_size: "1gb"
+    environment:
+      - SE_EVENT_BUS_HOST=selenium-hub
+      - SE_EVENT_BUS_PUBLISH_PORT=4442
+      - SE_EVENT_BUS_SUBSCRIBE_PORT=4443
+      - SE_NODE_MAX_SESSIONS=1
+      - SE_NODE_SESSION_TIMEOUT=300
+    deploy:
+      replicas: 6
+    mem_limit: 1g
+
+  lead-gen-api:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "80:8000"
+    depends_on:
+      - selenium-hub
+    env_file:
+      - .env
+    environment:
+      - SELENIUM_HUB_URL=http://selenium-hub:4444
+      - SELENIUM_DRIVERS_COUNT=6
+    mem_limit: 4g

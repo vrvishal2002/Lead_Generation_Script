@@ -25,9 +25,12 @@ from pathlib import Path
 # ── env config ────────────────────────────────────────────────────────────────
 S3_BUCKET_NAME              = os.environ.get("S3_BUCKET_NAME")
 AWS_REGION                  = os.environ.get("AWS_REGION", "ap-south-1")
+AWS_ENDPOINT_URL            = os.environ.get("AWS_ENDPOINT_URL")  # custom endpoint for Oracle/MinIO/etc.
 GCS_BUCKET_NAME             = os.environ.get("GCS_BUCKET_NAME")
 AZURE_CONTAINER_NAME        = os.environ.get("AZURE_CONTAINER_NAME")
 AZURE_STORAGE_CONNECTION_STRING = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
+GOOGLE_DRIVE_FOLDER_ID      = os.environ.get("GOOGLE_DRIVE_FOLDER_ID")
+GOOGLE_DRIVE_CREDENTIALS    = os.environ.get("GOOGLE_DRIVE_CREDENTIALS")  # service account JSON string
 
 # ── lazy singletons ────────────────────────────────────────────────────────────
 _s3_client        = None
@@ -38,13 +41,15 @@ _azure_container  = None
 # ── backend detection ──────────────────────────────────────────────────────────
 
 def get_backend() -> str:
-    """Returns 's3', 'gcs', 'azure', or 'local'."""
+    """Returns 's3', 'gcs', 'azure', 'gdrive', or 'local'."""
     if S3_BUCKET_NAME:
         return "s3"
     if GCS_BUCKET_NAME:
         return "gcs"
     if AZURE_CONTAINER_NAME and AZURE_STORAGE_CONNECTION_STRING:
         return "azure"
+    if GOOGLE_DRIVE_FOLDER_ID and GOOGLE_DRIVE_CREDENTIALS:
+        return "gdrive"
     return "local"
 
 
@@ -59,7 +64,10 @@ def _s3():
     global _s3_client
     if _s3_client is None:
         import boto3
-        _s3_client = boto3.client("s3", region_name=AWS_REGION)
+        kwargs = {"region_name": AWS_REGION}
+        if AWS_ENDPOINT_URL:
+            kwargs["endpoint_url"] = AWS_ENDPOINT_URL
+        _s3_client = boto3.client("s3", **kwargs)
     return _s3_client
 
 
@@ -187,6 +195,160 @@ class _AzureBackend:
         return _azure().get_blob_client(path).exists()
 
 
+# ── Google Drive backend ──────────────────────────────────────────────────────
+
+class _GoogleDriveBackend:
+    def __init__(self):
+        self._service = None
+        self._folder_cache: dict = {}
+
+    def _svc(self):
+        if self._service is None:
+            import json
+            from google.oauth2 import service_account
+            from googleapiclient.discovery import build
+            creds = service_account.Credentials.from_service_account_info(
+                json.loads(GOOGLE_DRIVE_CREDENTIALS),
+                scopes=["https://www.googleapis.com/auth/drive"]
+            )
+            self._service = build("drive", "v3", credentials=creds, cache_discovery=False)
+        return self._service
+
+    def _get_or_create_folder(self, svc, name: str, parent_id: str) -> str:
+        key = f"{parent_id}/{name}"
+        if key in self._folder_cache:
+            return self._folder_cache[key]
+        q = f"name='{name}' and '{parent_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
+        res = svc.files().list(q=q, fields="files(id)").execute().get("files", [])
+        if res:
+            fid = res[0]["id"]
+        else:
+            fid = svc.files().create(
+                body={"name": name, "mimeType": "application/vnd.google-apps.folder", "parents": [parent_id]},
+                fields="id"
+            ).execute()["id"]
+        self._folder_cache[key] = fid
+        return fid
+
+    def _resolve(self, svc, path: str, create: bool = False):
+        """Return (parent_folder_id, filename). Returns (None, filename) if folder not found."""
+        parts = path.replace("\\", "/").split("/")
+        filename = parts[-1]
+        current = GOOGLE_DRIVE_FOLDER_ID
+        for part in parts[:-1]:
+            if not part:
+                continue
+            key = f"{current}/{part}"
+            if key in self._folder_cache:
+                current = self._folder_cache[key]
+            elif create:
+                current = self._get_or_create_folder(svc, part, current)
+            else:
+                q = f"name='{part}' and '{current}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
+                res = svc.files().list(q=q, fields="files(id)").execute().get("files", [])
+                if not res:
+                    return None, filename
+                current = res[0]["id"]
+                self._folder_cache[key] = current
+        return current, filename
+
+    def _find_file_id(self, svc, path: str):
+        parent_id, filename = self._resolve(svc, path, create=False)
+        if not parent_id:
+            return None
+        q = f"name='{filename}' and '{parent_id}' in parents and trashed=false"
+        res = svc.files().list(q=q, fields="files(id)").execute().get("files", [])
+        return res[0]["id"] if res else None
+
+    def _list_recursive(self, svc, folder_id: str, path_prefix: str, out: list):
+        token = None
+        while True:
+            params = {
+                "q": f"'{folder_id}' in parents and trashed=false",
+                "fields": "nextPageToken, files(id, name, mimeType, modifiedTime)",
+                "pageSize": 100,
+            }
+            if token:
+                params["pageToken"] = token
+            resp = svc.files().list(**params).execute()
+            for item in resp.get("files", []):
+                item_path = f"{path_prefix}/{item['name']}"
+                if item["mimeType"] == "application/vnd.google-apps.folder":
+                    self._list_recursive(svc, item["id"], item_path, out)
+                elif item["name"].endswith(".csv"):
+                    out.append({"Key": item_path, "LastModified": item["modifiedTime"]})
+            token = resp.get("nextPageToken")
+            if not token:
+                break
+
+    def verify_connection(self):
+        svc = self._svc()
+        svc.files().get(fileId=GOOGLE_DRIVE_FOLDER_ID, fields="id").execute()
+        print(f"GDRIVE CONFIG SUCCESS: Connected to folder: {GOOGLE_DRIVE_FOLDER_ID}")
+
+    def list_files(self, prefix: str, sort_by_time: bool = False) -> list:
+        svc = self._svc()
+        prefix_clean = prefix.rstrip("/")
+        current = GOOGLE_DRIVE_FOLDER_ID
+        for part in prefix_clean.split("/"):
+            if not part:
+                continue
+            key = f"{current}/{part}"
+            if key in self._folder_cache:
+                current = self._folder_cache[key]
+            else:
+                q = f"name='{part}' and '{current}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
+                res = svc.files().list(q=q, fields="files(id)").execute().get("files", [])
+                if not res:
+                    return []
+                current = res[0]["id"]
+                self._folder_cache[key] = current
+        out: list = []
+        self._list_recursive(svc, current, prefix_clean, out)
+        if sort_by_time:
+            out.sort(key=lambda x: x["LastModified"])
+        return out
+
+    def read_file(self, path: str) -> bytes:
+        import io
+        from googleapiclient.http import MediaIoBaseDownload
+        svc = self._svc()
+        file_id = self._find_file_id(svc, path)
+        if not file_id:
+            raise FileNotFoundError(f"Google Drive file not found: {path}")
+        buf = io.BytesIO()
+        dl = MediaIoBaseDownload(buf, svc.files().get_media(fileId=file_id))
+        done = False
+        while not done:
+            _, done = dl.next_chunk()
+        return buf.getvalue()
+
+    def write_file(self, path: str, content: bytes):
+        import io
+        from googleapiclient.http import MediaIoBaseUpload
+        svc = self._svc()
+        parent_id, filename = self._resolve(svc, path, create=True)
+        media = MediaIoBaseUpload(io.BytesIO(content), mimetype="text/csv", resumable=False)
+        q = f"name='{filename}' and '{parent_id}' in parents and trashed=false"
+        existing = svc.files().list(q=q, fields="files(id)").execute().get("files", [])
+        if existing:
+            svc.files().update(fileId=existing[0]["id"], media_body=media).execute()
+        else:
+            svc.files().create(
+                body={"name": filename, "parents": [parent_id]},
+                media_body=media, fields="id"
+            ).execute()
+
+    def delete_file(self, path: str):
+        svc = self._svc()
+        file_id = self._find_file_id(svc, path)
+        if file_id:
+            svc.files().delete(fileId=file_id).execute()
+
+    def file_exists(self, path: str) -> bool:
+        return self._find_file_id(self._svc(), path) is not None
+
+
 # ── Local backend ──────────────────────────────────────────────────────────────
 
 class _LocalBackend:
@@ -224,7 +386,10 @@ class _LocalBackend:
 
 # ── active backend singleton ───────────────────────────────────────────────────
 
+_gdrive_backend = None
+
 def _backend():
+    global _gdrive_backend
     b = get_backend()
     if b == "s3":
         return _S3Backend()
@@ -232,6 +397,10 @@ def _backend():
         return _GCSBackend()
     if b == "azure":
         return _AzureBackend()
+    if b == "gdrive":
+        if _gdrive_backend is None:
+            _gdrive_backend = _GoogleDriveBackend()
+        return _gdrive_backend
     return _LocalBackend()
 
 

@@ -15,6 +15,8 @@ azure-storage-blob
 boto3
 google-cloud-storage
 google-genai
+google-api-python-client
+google-auth
 h11==0.16.0
 idna==3.11
 Jinja2==3.1.6

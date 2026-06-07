@@ -25,19 +25,15 @@ metadata:
   name: lead-gen
 
 ---
-# Store sensitive values as a Secret — fill these in before applying.
-# Alternatively manage them via Azure Key Vault + the Secrets Store CSI driver.
-apiVersion: v1
-kind: Secret
-metadata:
-  name: lead-gen-secrets
-  namespace: lead-gen
-type: Opaque
-stringData:
-  AZURE_STORAGE_CONNECTION_STRING: "<your-azure-storage-connection-string>"
-  AZURE_CONTAINER_NAME: "lead-gen-api"
-  GOOGLE_API_KEY: "<your-google-api-key>"
-  SELENIUM_HUB_URL: "http://selenium-hub.selenium.svc.cluster.local:4444"
+# Secret is managed separately — do NOT include it here to avoid overwriting real values on deploy.
+# Create or update the secret manually (run once):
+#
+#   kubectl create secret generic lead-gen-secrets -n lead-gen \
+#     --from-literal=AZURE_STORAGE_CONNECTION_STRING="<your-connection-string>" \
+#     --from-literal=AZURE_CONTAINER_NAME="lead-gen-api" \
+#     --from-literal=GOOGLE_API_KEY="<your-google-api-key>" \
+#     --from-literal=SELENIUM_HUB_URL="http://selenium-hub.selenium.svc.cluster.local:4444" \
+#     --save-config --dry-run=client -o yaml | kubectl apply -f -
 
 ---
 apiVersion: apps/v1

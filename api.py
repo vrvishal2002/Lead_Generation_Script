@@ -768,11 +768,12 @@ def run_job_logic(job_id: str, request: ScrapeRequest):
         for _ in range(10):
             helper.profile_queue.put(None)
 
-        helper.result_queue.put(None)
         helper.monitor_queue.put(None)
 
         wait_for_queue(helper.firm_queue)
         wait_for_queue(helper.profile_queue)
+
+        helper.result_queue.put(None)
         wait_for_queue(helper.result_queue)
 
         if hasattr(helper, 'threads'):
