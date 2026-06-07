@@ -5,7 +5,7 @@ from log_lib import log
 
 
 
- 
+  
 class FirmScraper: 
 
     def __init__(self, log_path=None, config=None):
