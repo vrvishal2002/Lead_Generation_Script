@@ -78,6 +78,7 @@ jobs:
               echo "$ECR_PASSWORD" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
               mkdir -p /home/ubuntu/lead-gen
               cd /home/ubuntu/lead-gen
-              ECR_IMAGE="$ECR_IMAGE" docker compose -f docker-compose.aws.yml up -d --force-recreate
+              docker compose -f docker-compose.aws.yml down --remove-orphans || true
+              ECR_IMAGE="$ECR_IMAGE" docker compose -f docker-compose.aws.yml up -d
               docker image prune -f
           ENDSSH
