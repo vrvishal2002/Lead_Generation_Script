@@ -47,25 +47,29 @@ jobs:
           echo "ecr_registry=$ECR_REGISTRY" >> $GITHUB_OUTPUT
 
       - name: Copy compose file to EC2
-        env:
-          SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-        run: |
-          echo "$SSH_KEY" > /tmp/ec2-key.pem
-          chmod 600 /tmp/ec2-key.pem
-          ssh -o StrictHostKeyChecking=no -i /tmp/ec2-key.pem ubuntu@$EC2_HOST "mkdir -p /home/ubuntu/lead-gen"
-          scp -o StrictHostKeyChecking=no -i /tmp/ec2-key.pem docker-compose.aws.yml ubuntu@$EC2_HOST:/home/ubuntu/lead-gen/docker-compose.aws.yml
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: docker-compose.aws.yml
+          target: /home/ubuntu/lead-gen/
 
       - name: Deploy on EC2
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: ECR_REGISTRY,ECR_REPOSITORY,AWS_REGION
+          script: |
+            set -e
+            aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
+            mkdir -p /home/ubuntu/lead-gen
+            cd /home/ubuntu/lead-gen
+            ECR_IMAGE=$ECR_REGISTRY/$ECR_REPOSITORY:latest docker compose -f docker-compose.aws.yml up -d --force-recreate
+            docker image prune -f
         env:
           ECR_REGISTRY: ${{ steps.build.outputs.ecr_registry }}
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-        run: |
-          ssh -o StrictHostKeyChecking=no -i /tmp/ec2-key.pem ubuntu@$EC2_HOST << EOF
-            set -e
-            aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin $ECR_REGISTRY
-            cd /home/ubuntu/lead-gen
-            ECR_IMAGE=$ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:latest docker compose -f docker-compose.aws.yml up -d --force-recreate
-            docker image prune -f
-          EOF
-          rm -f /tmp/ec2-key.pem
+          ECR_REPOSITORY: ${{ env.ECR_REPOSITORY }}
+          AWS_REGION: ${{ env.AWS_REGION }}
