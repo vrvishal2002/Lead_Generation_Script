@@ -40,4 +40,6 @@ services:
       - SELENIUM_HUB_URL=http://selenium-hub:4444
       - SELENIUM_DRIVERS_COUNT=6
       - GOOGLE_API_KEY=AIzaSyBNhQK0iONS8JYDrHSPPpbNNpwegaSZgHY
+      - GOOGLE_PLACES_KEY=${GOOGLE_PLACES_KEY:-}
+      - YELP_API_KEY=${YELP_API_KEY:-}
     mem_limit: 2500m

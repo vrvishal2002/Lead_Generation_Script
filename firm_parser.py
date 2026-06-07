@@ -2,83 +2,15 @@ import os
 import re
 import time
 import requests
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote_plus
 from log_lib import log
 
-OVERPASS_URL = "https://overpass.kumi.systems/api/interpreter"
-PHOTON_URL = "https://photon.komoot.io/api/"
-
-
-def _geocode_city(city, state, log_path):
-    """Return (south, north, west, east) bounding box for the city via Photon geocoder."""
-    q = f"{city}, {state}" if state else city
-    try:
-        resp = requests.get(
-            PHOTON_URL,
-            params={"q": q, "limit": 1, "lang": "en"},
-            headers={"User-Agent": "LeadGenScript/1.0"},
-            timeout=15,
-        )
-        features = resp.json().get("features", [])
-        if not features:
-            log(f"Photon: no results for '{q}'", log_path)
-            return None
-        # extent = [west, north, east, south]
-        extent = features[0].get("properties", {}).get("extent")
-        if extent and len(extent) == 4:
-            w, n, e, s = extent
-        else:
-            # Fall back to point ± small padding
-            coords = features[0].get("geometry", {}).get("coordinates", [])
-            if not coords:
-                return None
-            lon, lat = coords
-            w, e, s, n = lon - 0.1, lon + 0.1, lat - 0.1, lat + 0.1
-        # Expand tiny bounding boxes (small town) by ~5 km
-        if (n - s) < 0.05:
-            s -= 0.05; n += 0.05
-        if (e - w) < 0.05:
-            w -= 0.05; e += 0.05
-        log(f"Photon bbox for '{q}': s={s:.3f} n={n:.3f} w={w:.3f} e={e:.3f}", log_path)
-        return s, n, w, e
-    except Exception as exc:
-        log(f"Photon geocode failed for '{q}': {exc}", log_path)
-        return None
-
-
-def _overpass_lawyers(south, north, west, east, log_path):
-    """Query OSM Overpass for lawyer offices inside the bounding box, with retries."""
-    bbox = f"{south},{west},{north},{east}"
-    query = (
-        f'[out:json][timeout:60];'
-        f'('
-        f'node["office"="lawyer"]({bbox});'
-        f'way["office"="lawyer"]({bbox});'
-        f'node["office"="law_firm"]({bbox});'
-        f'way["office"="law_firm"]({bbox});'
-        f'node["amenity"="lawyer"]({bbox});'
-        f');'
-        f'out tags;'
-    )
-    for attempt in range(3):
-        try:
-            if attempt > 0:
-                wait = 15 * attempt
-                log(f"Overpass retry {attempt}/2 — waiting {wait}s", log_path)
-                time.sleep(wait)
-            log(f"Overpass query (attempt {attempt + 1})", log_path)
-            resp = requests.get(OVERPASS_URL, params={"data": query}, timeout=90)
-            if resp.status_code == 200:
-                return resp.json().get("elements", [])
-            log(f"Overpass HTTP {resp.status_code} on attempt {attempt + 1}", log_path)
-        except Exception as exc:
-            log(f"Overpass attempt {attempt + 1} failed: {exc}", log_path)
-    log("Overpass failed after 3 attempts", log_path)
-    return []
+GOOGLE_PLACES_KEY = os.environ.get("GOOGLE_PLACES_KEY", "")
+YELP_API_KEY      = os.environ.get("YELP_API_KEY", "")
+SELENIUM_HUB_URL  = os.environ.get("SELENIUM_HUB_URL", "http://localhost:4444")
 
 
 def _parse_location(query):
-    """Extract city and state from a query string like 'lawyers in New York City, New York'."""
     match = re.search(r'\bin\s+(.+)$', query, re.IGNORECASE)
     location = match.group(1).strip() if match else query.strip()
     parts = [p.strip() for p in location.split(",")]
@@ -87,82 +19,378 @@ def _parse_location(query):
     return city, state
 
 
+def _normalise(url):
+    try:
+        parsed = urlparse(url if "://" in url else "https://" + url)
+        netloc = parsed.netloc.lstrip("www.")
+        return f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else None
+    except Exception:
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Option 1 — Google Places API
+# Needs: GOOGLE_PLACES_KEY env var (Places API enabled)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _google_places(query, city, state, target, log_path, status_cb, cancel_event):
+    if not GOOGLE_PLACES_KEY:
+        log("Google Places: GOOGLE_PLACES_KEY not set — skipping", log_path)
+        return []
+
+    log("Firm discovery [1/3]: Google Places API", log_path)
+    results, seen = [], set()
+    search_q = f"{query} in {city}, {state}" if state else f"{query} in {city}"
+    next_token = None
+
+    for _ in range(3):
+        if cancel_event and cancel_event.is_set():
+            break
+        if len(results) >= target:
+            break
+
+        params = {"pagetoken": next_token, "key": GOOGLE_PLACES_KEY} if next_token \
+                 else {"query": search_q, "key": GOOGLE_PLACES_KEY}
+        if next_token:
+            time.sleep(2)
+
+        try:
+            resp = requests.get(
+                "https://maps.googleapis.com/maps/api/place/textsearch/json",
+                params=params, timeout=15
+            ).json()
+
+            status = resp.get("status")
+            if status not in ("OK", "ZERO_RESULTS"):
+                log(f"Google Places status: {status} — {resp.get('error_message','')}", log_path)
+                return results
+
+            for place in resp.get("results", []):
+                if len(results) >= target:
+                    break
+                place_id = place.get("place_id")
+                name = place.get("name", "").strip()
+                if not name or not place_id:
+                    continue
+
+                detail = requests.get(
+                    "https://maps.googleapis.com/maps/api/place/details/json",
+                    params={"place_id": place_id, "fields": "website", "key": GOOGLE_PLACES_KEY},
+                    timeout=10
+                ).json()
+                website = detail.get("result", {}).get("website", "")
+                if not website:
+                    continue
+
+                url = _normalise(website)
+                if not url or url in seen:
+                    continue
+                seen.add(url)
+                results.append({"Firm Name": name, "Website": url})
+                if status_cb:
+                    status_cb(len(results), target)
+                log(f"  {len(results)}. {name} — {url}", log_path)
+
+            next_token = resp.get("next_page_token")
+            if not next_token:
+                break
+
+        except Exception as e:
+            log(f"Google Places error: {e}", log_path)
+            break
+
+    log(f"Google Places found {len(results)} firms", log_path)
+    return results
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Option 2 — Yelp Fusion API
+# Needs: YELP_API_KEY env var
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _yelp_firms(city, state, target, log_path, status_cb, cancel_event):
+    if not YELP_API_KEY:
+        log("Yelp: YELP_API_KEY not set — skipping", log_path)
+        return []
+
+    log("Firm discovery [2/3]: Yelp Fusion API", log_path)
+    results, seen = [], set()
+    location = f"{city}, {state}" if state else city
+    offset = 0
+
+    while len(results) < target:
+        if cancel_event and cancel_event.is_set():
+            break
+        try:
+            resp = requests.get(
+                "https://api.yelp.com/v3/businesses/search",
+                headers={"Authorization": f"Bearer {YELP_API_KEY}"},
+                params={
+                    "term": "law firm attorneys lawyers",
+                    "location": location,
+                    "categories": "lawyers",
+                    "limit": min(50, target - len(results)),
+                    "offset": offset,
+                },
+                timeout=15
+            ).json()
+
+            businesses = resp.get("businesses", [])
+            if not businesses:
+                break
+
+            for biz in businesses:
+                if len(results) >= target:
+                    break
+                biz_id = biz.get("id", "")
+                name   = biz.get("name", "").strip()
+                if not name or not biz_id:
+                    continue
+
+                # Fetch business detail to get actual website
+                try:
+                    detail = requests.get(
+                        f"https://api.yelp.com/v3/businesses/{biz_id}",
+                        headers={"Authorization": f"Bearer {YELP_API_KEY}"},
+                        timeout=10
+                    ).json()
+                    website = detail.get("url", "")  # Yelp page fallback
+                    # Try to get real firm website from Yelp page
+                    yelp_page = requests.get(detail.get("url", ""), timeout=10,
+                                             headers={"User-Agent": "Mozilla/5.0"})
+                    from bs4 import BeautifulSoup
+                    soup = BeautifulSoup(yelp_page.text, "html.parser")
+                    biz_website = soup.select_one("a[href*='biz_website_url']") or \
+                                  soup.select_one("p.css-1p9ibgf a")
+                    if biz_website:
+                        website = biz_website.get("href", website)
+                except Exception:
+                    website = biz.get("url", "")
+
+                if not website:
+                    continue
+                url = _normalise(website)
+                if not url or "yelp.com" in url or url in seen:
+                    continue
+                seen.add(url)
+                results.append({"Firm Name": name, "Website": url})
+                if status_cb:
+                    status_cb(len(results), target)
+                log(f"  {len(results)}. {name} — {url}", log_path)
+
+            offset += len(businesses)
+            if offset >= resp.get("total", 0):
+                break
+
+        except Exception as e:
+            log(f"Yelp error: {e}", log_path)
+            break
+
+    log(f"Yelp found {len(results)} firms", log_path)
+    return results
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Option 3 — Google Maps scraping via Selenium
+# Uses existing Selenium Grid (no API key needed)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _google_maps_scrape(query, city, state, target, log_path, status_cb, cancel_event):
+    log("Firm discovery [3/3]: Google Maps Selenium scraping", log_path)
+    results, seen = [], set()
+
+    try:
+        from selenium import webdriver
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.chrome.options import Options
+
+        location   = f"{city} {state}".strip()
+        search_q   = quote_plus(f"law firms lawyers {location}")
+        maps_url   = f"https://www.google.com/maps/search/{search_q}/"
+
+        options = Options()
+        options.add_argument("--headless=new")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_argument("--window-size=1280,900")
+        options.add_argument(
+            "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        )
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+
+        driver = webdriver.Remote(command_executor=SELENIUM_HUB_URL, options=options)
+        wait   = WebDriverWait(driver, 8)
+
+        try:
+            driver.get(maps_url)
+            time.sleep(3)
+
+            # Dismiss cookie consent if present
+            for btn_text in ["Accept all", "Reject all", "Accept"]:
+                try:
+                    driver.find_element(By.XPATH, f"//button[contains(.,'{btn_text}')]").click()
+                    time.sleep(1)
+                    break
+                except Exception:
+                    pass
+
+            processed_hrefs = set()
+            scroll_panel_attempts = 0
+
+            while len(results) < target and scroll_panel_attempts < 15:
+                if cancel_event and cancel_event.is_set():
+                    break
+
+                # Collect all place links in the results panel
+                cards = driver.find_elements(By.CSS_SELECTOR, "a.hfpxzc")
+                new_cards = [c for c in cards if c.get_attribute("href") not in processed_hrefs]
+
+                if not new_cards:
+                    # Scroll the results panel to load more
+                    try:
+                        panel = driver.find_element(By.CSS_SELECTOR, "div[role='feed']")
+                        driver.execute_script("arguments[0].scrollBy(0, 2000)", panel)
+                        time.sleep(2)
+                        scroll_panel_attempts += 1
+                        continue
+                    except Exception:
+                        break
+
+                for card in new_cards:
+                    if len(results) >= target:
+                        break
+                    if cancel_event and cancel_event.is_set():
+                        break
+
+                    href = card.get_attribute("href") or ""
+                    label = card.get_attribute("aria-label") or ""
+                    name  = label.strip()
+                    processed_hrefs.add(href)
+
+                    if not name:
+                        continue
+
+                    try:
+                        driver.execute_script("arguments[0].click();", card)
+                        time.sleep(2.5)
+
+                        # Look for website button in the detail panel
+                        website = ""
+                        try:
+                            web_el = wait.until(EC.presence_of_element_located(
+                                (By.CSS_SELECTOR, "a[data-item-id='authority']")
+                            ))
+                            website = web_el.get_attribute("href") or ""
+                        except Exception:
+                            pass
+
+                        if not website:
+                            try:
+                                links = driver.find_elements(By.CSS_SELECTOR, "a[href^='http']")
+                                for lnk in links:
+                                    h = lnk.get_attribute("href") or ""
+                                    if h and "google" not in h and "goo.gl" not in h:
+                                        website = h
+                                        break
+                            except Exception:
+                                pass
+
+                        if not website:
+                            continue
+
+                        url = _normalise(website)
+                        if not url or "google.com" in url or url in seen:
+                            continue
+
+                        seen.add(url)
+                        results.append({"Firm Name": name, "Website": url})
+                        if status_cb:
+                            status_cb(len(results), target)
+                        log(f"  {len(results)}. {name} — {url}", log_path)
+
+                    except Exception as e:
+                        log(f"  Card error ({name}): {e}", log_path)
+                    finally:
+                        # Return to results list
+                        try:
+                            back = driver.find_element(
+                                By.CSS_SELECTOR, "button[aria-label='Back']"
+                            )
+                            back.click()
+                            time.sleep(1.5)
+                        except Exception:
+                            try:
+                                driver.execute_script("window.history.back()")
+                                time.sleep(1.5)
+                            except Exception:
+                                pass
+
+                scroll_panel_attempts += 1
+
+        finally:
+            driver.quit()
+
+    except Exception as e:
+        log(f"Google Maps scrape error: {e}", log_path)
+
+    log(f"Google Maps scrape found {len(results)} firms", log_path)
+    return results
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FirmParser — tries all 3 options in order until target is met
+# ─────────────────────────────────────────────────────────────────────────────
+
 class FirmParser:
 
     def __init__(self, log_path=None):
         self.log_path = log_path
 
     def scrape_firms(self, query, target=50, status_callback=None, cancel_event=None):
-        """Discover law firms via OpenStreetMap (Nominatim + Overpass). Free, no API key needed."""
         if cancel_event and cancel_event.is_set():
             return []
 
         city, state = _parse_location(query)
-        log(f"Firm discovery — city: '{city}', state: '{state}'", self.log_path)
+        log(f"Firm discovery — city: '{city}', state: '{state}', target: {target}", self.log_path)
 
-        # Step 1: geocode city → bounding box
-        bbox = _geocode_city(city, state, self.log_path)
-        if not bbox:
-            log("Could not geocode city — no firms returned", self.log_path)
-            return []
-
-        south, north, west, east = bbox
-
-        # Step 2: fetch all lawyer nodes in bounding box
-        elements = _overpass_lawyers(south, north, west, east, self.log_path)
-        log(f"Overpass returned {len(elements)} lawyer entries", self.log_path)
-
-        # Step 3: extract firms that have a website
         results = []
-        seen_websites = set()
 
-        for el in elements:
-            if cancel_event and cancel_event.is_set():
-                break
-            if len(results) >= target:
-                break
+        # Option 1: Google Places API
+        if not (cancel_event and cancel_event.is_set()):
+            results = _google_places(query, city, state, target, self.log_path, status_callback, cancel_event)
 
-            tags = el.get("tags", {})
-            name = tags.get("name", "").strip()
-            website = (
-                tags.get("website", "")
-                or tags.get("contact:website", "")
-                or tags.get("url", "")
-            ).strip()
+        # Option 2: Yelp Fusion API (if Places didn't reach target)
+        if len(results) < target and not (cancel_event and cancel_event.is_set()):
+            log(f"Places gave {len(results)}/{target} — trying Yelp", self.log_path)
+            yelp = _yelp_firms(city, state, target - len(results), self.log_path, status_callback, cancel_event)
+            seen = {r["Website"] for r in results}
+            results += [r for r in yelp if r["Website"] not in seen]
 
-            if not name or not website:
-                continue
+        # Option 3: Google Maps Selenium scraping (final fallback)
+        if len(results) < target and not (cancel_event and cancel_event.is_set()):
+            log(f"Yelp gave {len(results)}/{target} — trying Google Maps scrape", self.log_path)
+            gm = _google_maps_scrape(query, city, state, target - len(results), self.log_path, status_callback, cancel_event)
+            seen = {r["Website"] for r in results}
+            results += [r for r in gm if r["Website"] not in seen]
 
-            # Normalise to root domain
-            try:
-                parsed = urlparse(website if "://" in website else "https://" + website)
-                website = f"{parsed.scheme}://{parsed.netloc}"
-            except Exception:
-                continue
+        log(f"Firm discovery complete: {len(results)} firms total", self.log_path)
+        return results[:target]
 
-            if website in seen_websites:
-                continue
-
-            seen_websites.add(website)
-            results.append({"Firm Name": name, "Website": website})
-
-            if status_callback:
-                status_callback(len(results), target)
-            log(f"{len(results)}. {name} — {website}", self.log_path)
-
-        log(f"Firm discovery done: {len(results)} firms with websites", self.log_path)
-        return results
-
-    # Backward-compatible alias
     def scrape_google_places(self, query, target=50, status_callback=None, cancel_event=None):
         return self.scrape_firms(query, target, status_callback, cancel_event)
 
 
 if __name__ == "__main__":
     import pandas as pd
-    query = "medical malpractice and personal injury lawyers in New York City, New York"
-    data = FirmParser().scrape_firms(query, 50)
+    query = "medical malpractice and personal injury lawyers in Anchorage, Alaska"
+    data = FirmParser().scrape_firms(query, 20)
     print(f"\nFound {len(data)} firms")
     if data:
-        pd.DataFrame(data).to_csv("osm_firms.csv", index=False)
-        print("Saved to osm_firms.csv")
+        pd.DataFrame(data).to_csv("firms_test.csv", index=False)
+        print("Saved to firms_test.csv")
+        for i, f in enumerate(data, 1):
+            print(f"  {i}. {f['Firm Name']} — {f['Website']}")
