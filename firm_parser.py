@@ -216,14 +216,21 @@ def _google_maps_scrape(query, city, state, target, log_path, status_cb, cancel_
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_argument("--window-size=1280,900")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--disable-extensions")
+        options.add_argument("--blink-settings=imagesEnabled=false")
+        options.add_argument("--renderer-process-limit=2")
         options.add_argument(
             "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
         )
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
 
-        driver = webdriver.Remote(command_executor=SELENIUM_HUB_URL, options=options)
-        wait   = WebDriverWait(driver, 8)
+        def _new_driver():
+            d = webdriver.Remote(command_executor=SELENIUM_HUB_URL, options=options)
+            return d, WebDriverWait(d, 8)
+
+        driver, wait = _new_driver()
 
         try:
             driver.get(maps_url)
@@ -292,49 +299,67 @@ def _google_maps_scrape(query, city, state, target, log_path, status_cb, cancel_
                 if cancel_event and cancel_event.is_set():
                     break
 
-                try:
-                    driver.get(href)
-                    time.sleep(2.5)
-
-                    website = ""
-                    # Primary: official website button
+                website = ""
+                for attempt in range(2):
                     try:
-                        web_el = wait.until(EC.presence_of_element_located(
-                            (By.CSS_SELECTOR, "a[data-item-id='authority']")
-                        ))
-                        website = web_el.get_attribute("href") or ""
-                    except Exception:
-                        pass
+                        driver.get(href)
+                        time.sleep(2)
 
-                    # Fallback: any non-google external link
-                    if not website:
+                        # Primary: official website button
                         try:
+                            web_el = wait.until(EC.presence_of_element_located(
+                                (By.CSS_SELECTOR, "a[data-item-id='authority']")
+                            ))
+                            website = web_el.get_attribute("href") or ""
+                        except Exception:
+                            pass
+
+                        # Fallback: any non-google external link
+                        if not website:
                             for lnk in driver.find_elements(By.CSS_SELECTOR, "a[href^='http']"):
                                 h = lnk.get_attribute("href") or ""
                                 if h and "google" not in h and "goo.gl" not in h:
                                     website = h
                                     break
-                        except Exception:
-                            pass
 
-                    if not website:
-                        continue
+                        break  # success — no retry needed
 
-                    url = _normalise(website)
-                    if not url or "google.com" in url or url in seen:
-                        continue
+                    except Exception as e:
+                        err_str = str(e)
+                        if ("session deleted" in err_str or "tab crashed" in err_str
+                                or "no such session" in err_str) and attempt == 0:
+                            log(f"  Chrome crashed — restarting session", log_path)
+                            try:
+                                driver.quit()
+                            except Exception:
+                                pass
+                            try:
+                                driver, wait = _new_driver()
+                            except Exception as restart_err:
+                                log(f"  Driver restart failed: {restart_err}", log_path)
+                                break
+                        else:
+                            log(f"  Error fetching {name}: {e}", log_path)
+                            break
 
-                    seen.add(url)
-                    results.append({"Firm Name": name, "Website": url})
-                    if status_cb:
-                        status_cb(len(results), target)
-                    log(f"  {len(results)}. {name} — {url}", log_path)
+                if not website:
+                    continue
 
-                except Exception as e:
-                    log(f"  Error fetching {name}: {e}", log_path)
+                url = _normalise(website)
+                if not url or "google.com" in url or url in seen:
+                    continue
+
+                seen.add(url)
+                results.append({"Firm Name": name, "Website": url})
+                if status_cb:
+                    status_cb(len(results), target)
+                log(f"  {len(results)}. {name} — {url}", log_path)
 
         finally:
-            driver.quit()
+            try:
+                driver.quit()
+            except Exception:
+                pass
 
     except Exception as e:
         log(f"Google Maps scrape error: {e}", log_path)

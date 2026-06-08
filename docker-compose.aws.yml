@@ -18,14 +18,14 @@ services:
     restart: unless-stopped
     depends_on:
       - selenium-hub
-    shm_size: "1gb"
+    shm_size: "2gb"
     environment:
       - SE_EVENT_BUS_HOST=selenium-hub
       - SE_EVENT_BUS_PUBLISH_PORT=4442
       - SE_EVENT_BUS_SUBSCRIBE_PORT=4443
       - SE_NODE_MAX_SESSIONS=1
       - SE_NODE_SESSION_TIMEOUT=300
-    mem_limit: 700m
+    mem_limit: 1500m
 
   lead-gen-api:
     image: ${ECR_IMAGE}
