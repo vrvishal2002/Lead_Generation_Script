@@ -206,9 +206,9 @@ def _google_maps_scrape(query, city, state, target, log_path, status_cb, cancel_
         from selenium.webdriver.support import expected_conditions as EC
         from selenium.webdriver.chrome.options import Options
 
-        location   = f"{city} {state}".strip()
-        search_q   = quote_plus(f"law firms lawyers {location}")
-        maps_url   = f"https://www.google.com/maps/search/{search_q}/"
+        location = f"{city} {state}".strip()
+        search_q = quote_plus(f"law firms lawyers {location}")
+        maps_url = f"https://www.google.com/maps/search/{search_q}/"
 
         options = Options()
         options.add_argument("--headless=new")
@@ -238,98 +238,100 @@ def _google_maps_scrape(query, city, state, target, log_path, status_cb, cancel_
                 except Exception:
                     pass
 
-            processed_hrefs = set()
-            scroll_panel_attempts = 0
+            # ── Phase 1: scroll results panel to collect all card hrefs + names ──
+            collected = []   # list of (name, href)
+            seen_hrefs = set()
+            no_new_count = 0
 
-            while len(results) < target and scroll_panel_attempts < 15:
+            log("  Phase 1: collecting firm cards via scroll", log_path)
+            while len(collected) < target * 3 and no_new_count < 5:
                 if cancel_event and cancel_event.is_set():
                     break
 
-                # Collect all place links in the results panel
                 cards = driver.find_elements(By.CSS_SELECTOR, "a.hfpxzc")
-                new_cards = [c for c in cards if c.get_attribute("href") not in processed_hrefs]
-
-                if not new_cards:
-                    # Scroll the results panel to load more
-                    try:
-                        panel = driver.find_element(By.CSS_SELECTOR, "div[role='feed']")
-                        driver.execute_script("arguments[0].scrollBy(0, 2000)", panel)
-                        time.sleep(2)
-                        scroll_panel_attempts += 1
-                        continue
-                    except Exception:
-                        break
-
-                for card in new_cards:
-                    if len(results) >= target:
-                        break
-                    if cancel_event and cancel_event.is_set():
-                        break
-
-                    href = card.get_attribute("href") or ""
+                added = 0
+                for card in cards:
+                    href  = card.get_attribute("href") or ""
                     label = card.get_attribute("aria-label") or ""
                     name  = label.strip()
-                    processed_hrefs.add(href)
+                    if href and name and href not in seen_hrefs:
+                        seen_hrefs.add(href)
+                        collected.append((name, href))
+                        added += 1
 
-                    if not name:
-                        continue
+                log(f"  Scroll: {len(collected)} cards collected (+{added})", log_path)
 
+                if added == 0:
+                    no_new_count += 1
+                else:
+                    no_new_count = 0
+
+                # Check if panel is fully scrolled (end-of-results marker)
+                try:
+                    driver.find_element(By.CSS_SELECTOR, "p.fontBodyMedium > span > span")
+                    log("  Reached end of results panel", log_path)
+                    break
+                except Exception:
+                    pass
+
+                # Scroll the feed panel down
+                try:
+                    panel = driver.find_element(By.CSS_SELECTOR, "div[role='feed']")
+                    driver.execute_script("arguments[0].scrollBy(0, 2500)", panel)
+                    time.sleep(2)
+                except Exception:
+                    break
+
+            log(f"  Phase 1 done: {len(collected)} cards found", log_path)
+
+            # ── Phase 2: visit each place URL to extract website ──
+            log("  Phase 2: extracting websites from each firm", log_path)
+            for name, href in collected:
+                if len(results) >= target:
+                    break
+                if cancel_event and cancel_event.is_set():
+                    break
+
+                try:
+                    driver.get(href)
+                    time.sleep(2.5)
+
+                    website = ""
+                    # Primary: official website button
                     try:
-                        driver.execute_script("arguments[0].click();", card)
-                        time.sleep(2.5)
+                        web_el = wait.until(EC.presence_of_element_located(
+                            (By.CSS_SELECTOR, "a[data-item-id='authority']")
+                        ))
+                        website = web_el.get_attribute("href") or ""
+                    except Exception:
+                        pass
 
-                        # Look for website button in the detail panel
-                        website = ""
+                    # Fallback: any non-google external link
+                    if not website:
                         try:
-                            web_el = wait.until(EC.presence_of_element_located(
-                                (By.CSS_SELECTOR, "a[data-item-id='authority']")
-                            ))
-                            website = web_el.get_attribute("href") or ""
+                            for lnk in driver.find_elements(By.CSS_SELECTOR, "a[href^='http']"):
+                                h = lnk.get_attribute("href") or ""
+                                if h and "google" not in h and "goo.gl" not in h:
+                                    website = h
+                                    break
                         except Exception:
                             pass
 
-                        if not website:
-                            try:
-                                links = driver.find_elements(By.CSS_SELECTOR, "a[href^='http']")
-                                for lnk in links:
-                                    h = lnk.get_attribute("href") or ""
-                                    if h and "google" not in h and "goo.gl" not in h:
-                                        website = h
-                                        break
-                            except Exception:
-                                pass
+                    if not website:
+                        continue
 
-                        if not website:
-                            continue
+                    url = _normalise(website)
+                    if not url or "google.com" in url or url in seen:
+                        continue
 
-                        url = _normalise(website)
-                        if not url or "google.com" in url or url in seen:
-                            continue
+                    seen.add(url)
+                    results.append({"Firm Name": name, "Website": url})
+                    if status_cb:
+                        status_cb(len(results), target)
+                    log(f"  {len(results)}. {name} — {url}", log_path)
 
-                        seen.add(url)
-                        results.append({"Firm Name": name, "Website": url})
-                        if status_cb:
-                            status_cb(len(results), target)
-                        log(f"  {len(results)}. {name} — {url}", log_path)
-
-                    except Exception as e:
-                        log(f"  Card error ({name}): {e}", log_path)
-                    finally:
-                        # Return to results list
-                        try:
-                            back = driver.find_element(
-                                By.CSS_SELECTOR, "button[aria-label='Back']"
-                            )
-                            back.click()
-                            time.sleep(1.5)
-                        except Exception:
-                            try:
-                                driver.execute_script("window.history.back()")
-                                time.sleep(1.5)
-                            except Exception:
-                                pass
-
-                scroll_panel_attempts += 1
+                except Exception as e:
+                    log(f"  Error fetching {name}: {e}", log_path)
 
         finally:
             driver.quit()
