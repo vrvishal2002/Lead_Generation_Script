@@ -6,6 +6,13 @@ import re
 log_path=None
 nd = NameDataset()
 
+# Legal title suffixes that appear in URLs/names but are not name words
+_NAME_NOISE = frozenset([
+    "inc", "incx", "profile",
+    "esq", "jr", "sr", "ii", "iii", "iv",
+    "jd", "phd", "md", "llm", "atty", "pc", "pa",
+])
+
 
 def is_strong_name_word(word):
     word = word.lower().strip(".,")
@@ -96,6 +103,10 @@ def is_profile_slug(url, is_profil_check=True, blacklist=None):
     words = slug.split()
 
     if not (2 <= len(words) <= 4):
+        # Allow single-word slugs that look like a combined first+last name
+        # (e.g. /sfleming, /kpenrod) — rare English word signals a name
+        if len(words) == 1 and len(words[0]) >= 5 and re.match(r'^[a-zA-Z]+$', words[0]):
+            return is_strong_name_word(words[0])
         return False
 
     if blacklist and any(w.lower() in blacklist for w in words):
@@ -162,9 +173,8 @@ def normalize_name(name, exclusions=None):
         name = name.replace(".cgi", "")
     if name.endswith(".pl"):
         name = name.replace(".pl", "")
-    # Industry-agnostic noise removal
-    for noise in ["inc", "incx", "profile"]:
-        name = name.replace(noise, "", 1)
+    # Industry-agnostic noise removal (word-level; full list in _NAME_NOISE)
+    name = " ".join(w for w in name.split() if w.lower() not in _NAME_NOISE)
 
     if exclusions:
         for word in exclusions:
@@ -173,6 +183,9 @@ def normalize_name(name, exclusions=None):
     name = name.replace("%2C", "", 1)
 
     name = re.sub(r"[-_.]", " ", name)
+
+    # Strip legal title suffixes as whole words (esq, jr, sr, jd, etc.)
+    name = " ".join(w for w in name.split() if w.lower() not in _NAME_NOISE)
 
     # Remove non-alphabet characters
     name = re.sub(r"[^a-z\s]", "", name)
@@ -203,16 +216,28 @@ def names_match(name1, name2):
     f1, m1, l1 = split_name(n1)
     f2, m2, l2 = split_name(n2)
 
-    # First + Last must match
-    if f1 != f2 or l1 != l2:
-        return False
+    def _middles_ok(m_a, m_b):
+        if m_a and m_b:
+            return any(i in [x[0] for x in m_b] for i in [x[0] for x in m_a])
+        return True
 
-    # If both have middle names → check initial match
-    if m1 and m2:
-        m1_initials = [x[0] for x in m1]
-        m2_initials = [x[0] for x in m2]
+    # Standard order: First + Last match
+    if f1 == f2 and l1 == l2:
+        return _middles_ok(m1, m2)
 
-        return any(i in m2_initials for i in m1_initials)
+    # Reversed slug format: URL stores "last-first[-middle]" (e.g. /hozubin-rebecca-j/)
+    # split_name("hozubin rebecca j") → f2="hozubin", m2=["rebecca"], l2="j"
+    # We need: n1's last (l1) == n2's first word (f2), and n1's first (f1) appears in n2 remainder
+    if f1 and l1 and f2:
+        if l1 == f2:
+            # n2's remaining words (middle + last) must contain f1
+            n2_rest = list(m2 or []) + ([l2] if l2 else [])
+            if n2_rest and f1 in n2_rest:
+                return True
+        # Also try the other direction (n1 is the reversed slug, n2 is the display name)
+        if l2 and l2 == f1:
+            n1_rest = list(m1 or []) + ([l1] if l1 else [])
+            if n1_rest and f2 in n1_rest:
+                return True
 
-    # If one has middle and other doesn't → still OK
-    return True
+    return False
