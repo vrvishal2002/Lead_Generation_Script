@@ -225,10 +225,19 @@ def names_match(name1, name2):
     if f1 == f2 and l1 == l2:
         return _middles_ok(m1, m2)
 
-    # Reversed slug format: URL stores last-first-middle (e.g. /hozubin-rebecca-j/)
-    # so name2 first = name1 last and vice versa
-    if f1 and l1 and f2 and l2:
-        if f1 == l2 and l1 == f2:
-            return True
+    # Reversed slug format: URL stores "last-first[-middle]" (e.g. /hozubin-rebecca-j/)
+    # split_name("hozubin rebecca j") → f2="hozubin", m2=["rebecca"], l2="j"
+    # We need: n1's last (l1) == n2's first word (f2), and n1's first (f1) appears in n2 remainder
+    if f1 and l1 and f2:
+        if l1 == f2:
+            # n2's remaining words (middle + last) must contain f1
+            n2_rest = list(m2 or []) + ([l2] if l2 else [])
+            if n2_rest and f1 in n2_rest:
+                return True
+        # Also try the other direction (n1 is the reversed slug, n2 is the display name)
+        if l2 and l2 == f1:
+            n1_rest = list(m1 or []) + ([l1] if l1 else [])
+            if n1_rest and f2 in n1_rest:
+                return True
 
     return False
