@@ -2,8 +2,21 @@ import re
 import copy
 from urllib.parse import urljoin, urlparse, unquote
 import name_processor_lib
-import soup_content_lib 
+import soup_content_lib
 from log_lib import log
+
+# Patterns like "Law Office of X", "Law Offices of X", "Office of X", "Attorneys at Law" that
+# prefix an attorney name in headings on single-attorney firm pages.
+_FIRM_PREFIX_RE = re.compile(
+    r'^(the\s+)?'
+    r'(law\s+office[s]?\s+of|law\s+firm\s+of|offices\s+of|office\s+of|'
+    r'law\s+group|attorneys?\s+at\s+law|law\s+offices?\s+of)\s*[,:\-]?\s*',
+    re.IGNORECASE
+)
+
+
+def _strip_firm_prefix(text: str) -> str:
+    return _FIRM_PREFIX_RE.sub("", text).strip()
 
 
 class ProfileProcessingHelper:
@@ -93,56 +106,76 @@ class ProfileProcessingHelper:
     
     
     # =====================================================
+    # HELPERS
+    # =====================================================
+
+    def _validate_heading_name(self, raw_text):
+        """Return a valid name string from heading text, or '' if not a person name."""
+        # Strip firm-name prefixes like "Law Office of"
+        text = _strip_firm_prefix(raw_text).strip()
+        if not text:
+            return ""
+        # Validate every word is a name word
+        for w in text.split():
+            if not name_processor_lib.is_strong_name_word(w):
+                return ""
+        return text
+
+    def _extract_name_from_headings(self, main, page_text, name_in_link, url):
+        """Try h1 (all), h2, h3 in order to find the attorney name on a profile page."""
+        for tag_name in ["h1", "h2", "h3"]:
+            for heading in main.find_all(tag_name):
+                # Gather text from heading and its inline children
+                children_texts = [c.get_text(strip=True) for c in heading.find_all()]
+                for child in heading.find_all():
+                    child.decompose()
+                raw = heading.get_text(strip=True)
+
+                candidates = [raw] + children_texts
+                for candidate in candidates:
+                    if not candidate:
+                        continue
+                    name = self._validate_heading_name(candidate)
+                    if not name:
+                        continue
+                    name_in_page = name_processor_lib.normalize_name(name, exclusions=self.slug_exclusions)
+                    if not name_in_link or name_processor_lib.names_match(name_in_page, name_in_link):
+                        return name
+                    # Name doesn't match URL slug — keep going only if all words appear in page text
+                    if all(w in page_text for w in name_in_link.split()):
+                        log(f"Name '{name_in_page}' doesn't match url slug '{name_in_link}' for {url}, using url slug", self.log_path)
+                        return name_in_link
+                    log(f"Name '{name_in_page}' doesn't match url slug '{name_in_link}' for {url}, discarding", self.log_path)
+        return ""
+
+    # =====================================================
     # PROFILE EXTRACTION
     # =====================================================
 
-    def extract_profile(self, url, firm_name=""):
+    def extract_profile(self, url, firm_name="", firm_body_text=""):
         soup = soup_content_lib.get_soup(url)
         if not soup:
             return None
 
         soup = soup_content_lib.clean_dom(soup)
         body_text = soup.get_text(separator=" ", strip=True).lower()
-        if self.profile_keywords and not any(keyword.lower() in body_text for keyword in self.profile_keywords):
-            log(f"Profile does not match required keywords: {self.profile_keywords}", self.log_path)
-            return None
+        # Skip keyword check if the firm's home/directory page already matched
+        if self.profile_keywords and not firm_body_text:
+            if not any(keyword.lower() in body_text for keyword in self.profile_keywords):
+                log(f"Profile does not match required keywords: {self.profile_keywords}", self.log_path)
+                return None
         if self.role_keywords and not any(keyword.lower() in body_text for keyword in self.role_keywords):
             log(f"Profile does not match required roles: {self.role_keywords}", self.log_path)
             return None
         main = self.get_main_content_profile(soup)
 
         text = main.get_text(" ", strip=True)
+        name_in_link = name_processor_lib.normalize_name(
+            url.strip('/').split('/')[-1].split('.')[0], exclusions=self.slug_exclusions
+        )
 
-        h1 = main.find("h1")
-        name = ""
-        if h1:
-            # Remove all child tags (like span)
-            children_h1 = []
-            for child in h1.find_all():
-                children_h1.append(child.get_text(strip=True) if child else "")
-                child.decompose()
-            name = h1.get_text(strip=True) if h1 else ""
-            for w in name.split():
-                if not name_processor_lib.is_strong_name_word(w):
-                    name = ""
-                    break
-            if name == "":
-                for words_name in children_h1:
-                    name = words_name
-                    for w in words_name.split():
-                        if not name_processor_lib.is_strong_name_word(words_name):
-                            name = ""
-                            break
-            if name:
-                name_in_page = name_processor_lib.normalize_name(name, exclusions=self.slug_exclusions)
-                name_in_link = name_processor_lib.normalize_name(url.strip('/').split('/')[-1].split('.')[0], exclusions=self.slug_exclusions)
-                if not name_processor_lib.names_match(name_in_page, name_in_link):
-                    if all(w in text for w in name_in_link.split()):
-                        log(f"Name in h1: {name_in_page} doesn't match name in url: {name_in_link} for {url}, but all words are in page text. Using name from url.", self.log_path)
-                        name = name_in_link
-                    else:
-                        log(f"Name in h1: {name_in_page} doesn't match name in url: {name_in_link} for {url}", self.log_path)
-                        name = ""
+        name = self._extract_name_from_headings(main, text, name_in_link, url)
+
         if name == "":
             name_from_url = url.strip('/').split('/')[-1].replace('-', ' ').replace('_', ' ')
             if not name_processor_lib.looks_like_name(name_from_url):
@@ -211,7 +244,7 @@ class ProfileProcessingHelper:
 
             # Try to find title
             name = self.get_profile_name_from_text(text, title_keywords)
-            
+
             if not name:
                 children = tag.find_all(recursive=False)[:2]
                 text = " ".join([child.get_text(strip=True) for child in children])
@@ -224,16 +257,62 @@ class ProfileProcessingHelper:
             email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', text)
             email = email_match.group() if email_match else None
 
-
             phone_match = re.search(r'\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}', text)
             phone = phone_match.group() if phone_match else ""
-            
+
             normalized_name = name_processor_lib.normalize_name(name, exclusions=self.slug_exclusions)
 
             profiles.append({
                 "Name": normalized_name,
                 "Phone": phone,
                 "Email": email,
+                "Profile URL": url
+            })
+
+        # ── Heading-scan pass: pick up h2/h3 names with role in adjacent siblings ──
+        # Handles patterns like:
+        #   <h3>Carson Honeycutt</h3><strong>Founder, Attorney</strong>
+        #   <h2>Josh B. Cooley</h2><h4>Cases of Note</h4>
+        seen_heading_names = {p["Name"] for p in profiles}
+        extended_role_kw = set(title_keywords)
+        for heading in soup.find_all(["h2", "h3"]):
+            heading_text = heading.get_text(" ", strip=True)
+            if len(heading_text) < 3 or len(heading_text) > 60:
+                continue
+            # Strip firm prefix before name check
+            heading_text = _strip_firm_prefix(heading_text)
+            if not name_processor_lib.looks_like_name(heading_text):
+                continue
+
+            # Build context from heading + next 3 siblings + parent container
+            context_parts = [heading_text]
+            sib = heading.find_next_sibling()
+            for _ in range(3):
+                if not sib:
+                    break
+                context_parts.append(sib.get_text(" ", strip=True))
+                sib = sib.find_next_sibling()
+            parent = heading.parent
+            if parent:
+                context_parts.append(parent.get_text(" ", strip=True))
+            context = " ".join(context_parts).lower()
+
+            if not any(k in context for k in extended_role_kw):
+                continue
+
+            normalized_name = name_processor_lib.normalize_name(heading_text, exclusions=self.slug_exclusions)
+            if normalized_name in seen_heading_names:
+                continue
+            seen_heading_names.add(normalized_name)
+
+            # Try to get email/phone from the card context
+            email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', " ".join(context_parts))
+            phone_match = re.search(r'\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}', " ".join(context_parts))
+
+            profiles.append({
+                "Name": normalized_name,
+                "Phone": phone_match.group() if phone_match else "",
+                "Email": email_match.group() if email_match else None,
                 "Profile URL": url
             })
 

@@ -277,6 +277,23 @@
                     </div>
                 </div>
 
+                <!-- Log Viewer -->
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                    <div class="flex justify-between items-center mb-3">
+                        <h2 class="text-xl font-semibold text-gray-800">Job Logs</h2>
+                        <div class="flex gap-2 items-center">
+                            <select id="logFileSelect" class="text-xs border rounded px-2 py-1 text-gray-600" onchange="loadSelectedLog()">
+                                <option value="">— select log —</option>
+                            </select>
+                            <button onclick="loadLatestLog()" class="text-xs bg-indigo-50 text-indigo-700 px-3 py-1 rounded border border-indigo-200 hover:bg-indigo-100 transition font-medium">Latest</button>
+                            <button onclick="refreshLogList()" class="text-xs text-gray-500 hover:text-gray-700 border px-2 py-1 rounded">⟳ Refresh list</button>
+                        </div>
+                    </div>
+                    <div id="logViewer" class="bg-gray-950 text-green-300 text-[11px] font-mono rounded-lg p-3 h-72 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+                        <span class="text-gray-500">Click "Latest" to load the most recent log.</span>
+                    </div>
+                </div>
+
                 <!-- Data Preview -->
                 <div id="previewContainer" class="bg-white p-6 rounded-xl shadow-sm border border-gray-200 hidden">
                     <div class="flex justify-between items-center mb-4">
@@ -1103,12 +1120,50 @@
             document.getElementById('previewContainer').classList.add('hidden');
         }
 
+        async function refreshLogList() {
+            try {
+                const res = await fetch('/logs');
+                const files = await res.json();
+                const sel = document.getElementById('logFileSelect');
+                sel.innerHTML = '<option value="">— select log —</option>' +
+                    files.map(f => `<option value="${f.name}">${f.name.split('/').pop()} (${f.last_modified.substring(0,16)})</option>`).join('');
+            } catch(e) { console.error('Log list error', e); }
+        }
+
+        async function loadLatestLog() {
+            const viewer = document.getElementById('logViewer');
+            viewer.textContent = 'Loading…';
+            try {
+                const res = await fetch('/logs/latest?tail=300');
+                if (!res.ok) { viewer.textContent = 'No logs found.'; return; }
+                const data = await res.json();
+                document.getElementById('logFileSelect').value = data.file;
+                viewer.textContent = data.lines.join('\n');
+                viewer.scrollTop = viewer.scrollHeight;
+            } catch(e) { viewer.textContent = 'Error: ' + e; }
+        }
+
+        async function loadSelectedLog() {
+            const name = document.getElementById('logFileSelect').value;
+            if (!name) return;
+            const viewer = document.getElementById('logViewer');
+            viewer.textContent = 'Loading…';
+            try {
+                const res = await fetch(`/logs/view?name=${encodeURIComponent(name)}&tail=300`);
+                if (!res.ok) { viewer.textContent = 'Not found.'; return; }
+                const data = await res.json();
+                viewer.textContent = data.lines.join('\n');
+                viewer.scrollTop = viewer.scrollHeight;
+            } catch(e) { viewer.textContent = 'Error: ' + e; }
+        }
+
+        refreshLogList();
         loadConfigs();
         loadUploadedFiles();
         loadConsolidatedFiles();
         loadSavedFiles();
         reconnectActiveJobs();
-        setInterval(loadFiles, 10000); 
+        setInterval(loadFiles, 10000);
         setInterval(loadUploadedFiles, 15000);
         setInterval(loadConsolidatedFiles, 20000);
         setInterval(loadSavedFiles, 25000);

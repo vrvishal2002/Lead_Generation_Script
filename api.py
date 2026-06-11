@@ -856,6 +856,46 @@ async def cancel_job(job_id: str):
 
     return {"message": "Cancellation request received."}
 
+@app.get("/logs")
+async def list_logs():
+    """Lists all log files available in storage, newest first."""
+    try:
+        files = storage_lib.list_files("logs/", sort_by_time=True)
+        return [{"name": f["Key"], "last_modified": str(f.get("LastModified", ""))} for f in reversed(files)]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/logs/latest")
+async def get_latest_log(tail: int = Query(default=200)):
+    """Returns the last `tail` lines of the most recent log file."""
+    try:
+        files = storage_lib.list_files("logs/", sort_by_time=True)
+        if not files:
+            raise HTTPException(status_code=404, detail="No log files found")
+        latest = files[-1]["Key"]
+        content = storage_lib.read_file(latest).decode("utf-8", errors="ignore")
+        lines = content.splitlines()
+        return {"file": latest, "lines": lines[-tail:]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/logs/view")
+async def view_log(name: str = Query(...), tail: int = Query(default=300)):
+    """Returns the last `tail` lines of a specific log file."""
+    try:
+        content = storage_lib.read_file(name).decode("utf-8", errors="ignore")
+        lines = content.splitlines()
+        return {"file": name, "lines": lines[-tail:]}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Log file not found")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/jobs/{job_id}/status")
 async def get_job_status(job_id: str):
     if job_id not in active_jobs:

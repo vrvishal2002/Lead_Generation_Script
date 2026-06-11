@@ -6,6 +6,13 @@ import re
 log_path=None
 nd = NameDataset()
 
+# Legal title suffixes that appear in URLs/names but are not name words
+_NAME_NOISE = frozenset([
+    "inc", "incx", "profile",
+    "esq", "jr", "sr", "ii", "iii", "iv",
+    "jd", "phd", "md", "llm", "atty", "pc", "pa",
+])
+
 
 def is_strong_name_word(word):
     word = word.lower().strip(".,")
@@ -96,6 +103,10 @@ def is_profile_slug(url, is_profil_check=True, blacklist=None):
     words = slug.split()
 
     if not (2 <= len(words) <= 4):
+        # Allow single-word slugs that look like a combined first+last name
+        # (e.g. /sfleming, /kpenrod) — rare English word signals a name
+        if len(words) == 1 and len(words[0]) >= 5 and re.match(r'^[a-zA-Z]+$', words[0]):
+            return is_strong_name_word(words[0])
         return False
 
     if blacklist and any(w.lower() in blacklist for w in words):
@@ -162,9 +173,8 @@ def normalize_name(name, exclusions=None):
         name = name.replace(".cgi", "")
     if name.endswith(".pl"):
         name = name.replace(".pl", "")
-    # Industry-agnostic noise removal
-    for noise in ["inc", "incx", "profile"]:
-        name = name.replace(noise, "", 1)
+    # Industry-agnostic noise removal (word-level; full list in _NAME_NOISE)
+    name = " ".join(w for w in name.split() if w.lower() not in _NAME_NOISE)
 
     if exclusions:
         for word in exclusions:
@@ -173,6 +183,9 @@ def normalize_name(name, exclusions=None):
     name = name.replace("%2C", "", 1)
 
     name = re.sub(r"[-_.]", " ", name)
+
+    # Strip legal title suffixes as whole words (esq, jr, sr, jd, etc.)
+    name = " ".join(w for w in name.split() if w.lower() not in _NAME_NOISE)
 
     # Remove non-alphabet characters
     name = re.sub(r"[^a-z\s]", "", name)
