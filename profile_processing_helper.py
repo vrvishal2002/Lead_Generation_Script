@@ -5,6 +5,13 @@ import name_processor_lib
 import soup_content_lib
 from log_lib import log
 
+# Section header pattern — headings that introduce a list of attorneys/team members
+# but are NOT names themselves. Used in the section-header scan pass.
+_SECTION_HEADER_RE = re.compile(
+    r'\b(attorneys|lawyers|team\s+members?|our\s+team|counsel|partners?|associates?|staff)\s*:?\s*$',
+    re.IGNORECASE
+)
+
 # Patterns like "Law Office of X", "Law Offices of X" that prefix an attorney name in headings.
 _FIRM_PREFIX_RE = re.compile(
     r'^(the\s+)?'
@@ -357,6 +364,39 @@ class ProfileProcessingHelper:
                 "Email": email_match.group() if email_match else None,
                 "Profile URL": url
             })
+
+        # ── Section-header scan: extract names listed under "Attorneys:", "Our Team:" etc ──
+        # Handles patterns like:
+        #   <h3>Attorneys:</h3>  <p>Darryl Thompson<br>Tyler Wright, Esq.</p>
+        # where the heading is a section label, not a name, and names follow as siblings.
+        # Each sibling is split by newlines (from <br> tags) to handle multiple names per element.
+        seen_names_so_far = {p["Name"] for p in profiles}
+        for heading in soup.find_all(["h1", "h2", "h3", "h4"]):
+            header_raw = heading.get_text(" ", strip=True)
+            if not _SECTION_HEADER_RE.search(header_raw):
+                continue
+            # Walk following siblings until we hit another heading
+            sib = heading.find_next_sibling()
+            while sib:
+                if sib.name in ("h1", "h2", "h3", "h4"):
+                    break
+                # Split on newlines (covers <br>-separated names in one element)
+                for line in sib.get_text("\n", strip=True).split("\n"):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    norm = name_processor_lib.normalize_name(line, self.slug_exclusions)
+                    if name_processor_lib.looks_like_name(norm) and norm not in seen_names_so_far:
+                        seen_names_so_far.add(norm)
+                        email_m = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', line)
+                        phone_m = re.search(r'\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}', line)
+                        profiles.append({
+                            "Name": norm,
+                            "Phone": phone_m.group() if phone_m else "",
+                            "Email": email_m.group() if email_m else None,
+                            "Profile URL": url
+                        })
+                sib = sib.find_next_sibling()
 
         # Remove duplicates
         unique_profiles = []

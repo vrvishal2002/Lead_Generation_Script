@@ -5,6 +5,12 @@ from log_lib import log
 from profile_processing_helper import ProfileProcessingHelper, _is_scrapable_url
 from bs4 import BeautifulSoup
 
+# Anchor text keywords that indicate a team/attorneys listing page.
+# Used as a fallback when the URL itself doesn't contain directory_keywords.
+# Kept narrow to avoid false positives from broad words like "about".
+_TEAM_ANCHOR_KEYWORDS = frozenset([
+    "team", "attorneys", "attorney", "lawyers", "lawyer", "people", "staff",
+])
 
 
 class DirectoryProcessingHelper:
@@ -36,8 +42,15 @@ class DirectoryProcessingHelper:
             and urlparse(full).netloc not in domain.replace("www.", ''):
                 continue
 
-            lower = full.lower()
-            if any(k in lower for k in self.directory_keywords):
+            lower_url = full.lower()
+            url_match = any(k in lower_url for k in self.directory_keywords)
+            # Also check anchor text — catches sites where the nav href path doesn't
+            # contain team-related words but the visible link text does (e.g. JS-rendered
+            # menus where "Our Team" links to /lawyers/ or a hash route).
+            link_text = link.get_text(strip=True).lower()
+            text_match = any(k in link_text for k in _TEAM_ANCHOR_KEYWORDS)
+
+            if url_match or text_match:
                 candidates.append(full)
 
         log(f"{home_url} - Directory Candiates: {list(set(candidates))}", self.log_path)
