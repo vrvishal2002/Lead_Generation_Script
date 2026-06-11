@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from typing import List, Dict, Optional
 from lead_generation_helper import LeadGenerationHelper
 from firm_parser import FirmParser
-from log_lib import log, get_domain_names, get_lead_profile_names, csv_file_lock
+from log_lib import log, flush_log, get_domain_names, get_lead_profile_names, csv_file_lock
 import storage_lib
 
 # Configure Gemini AI
@@ -753,6 +753,22 @@ def run_job_logic(job_id: str, request: ScrapeRequest):
         helper.status["cities_completed"] += 1
         helper.status["overall_progress"] = round((helper.status["cities_completed"] / len(request.cities)) * 100, 2)
 
+        # Checkpoint: save this city's leads immediately so progress survives a crash,
+        # then clear them from recent_leads to prevent unbounded memory growth (OOM).
+        city_folder = helper.config.get("folder_name", "attorney_profiles")
+        city_leads = [l for l in helper.status["recent_leads"] if l.get("City") == city]
+        if city_leads:
+            try:
+                city_safe = city.replace(" ", "_").replace("(", "").replace(")", "").replace(",", "")
+                chk_path = f"{city_folder}/saved/checkpoint_{helper.state}_{city_safe}_{job_id[:8]}.csv"
+                buf = io.StringIO()
+                pd.DataFrame(city_leads).to_csv(buf, index=False)
+                storage_lib.write_file(chk_path, buf.getvalue())
+                log(f"Checkpoint: saved {len(city_leads)} leads for {city} → {chk_path}", log_path)
+            except Exception as chk_err:
+                log(f"Checkpoint save failed for {city}: {chk_err}", log_path)
+        helper.status["recent_leads"] = [l for l in helper.status["recent_leads"] if l.get("City") != city]
+
     except Exception as e:
         helper.status["phase"] = "Error"
         log(f"Job {job_id} encountered error: {e}", log_path)
@@ -801,6 +817,7 @@ def run_job_logic(job_id: str, request: ScrapeRequest):
                 log(f"Auto-save failed for job {job_id}: {e}", log_path)
 
     log(f"Job {job_id} finished. Phase: {helper.status['phase']}", log_path)
+    flush_log(log_path)
     time.sleep(5)
     active_jobs.pop(job_id, None)
 

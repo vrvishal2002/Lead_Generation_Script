@@ -205,6 +205,7 @@ def _google_maps_scrape(query, city, state, target, log_path, status_cb, cancel_
         from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
         from selenium.webdriver.chrome.options import Options
+        from selenium.webdriver.remote.remote_connection import RemoteConnection
 
         location = f"{city} {state}".strip()
         search_q = quote_plus(f"law firms lawyers {location}")
@@ -227,7 +228,9 @@ def _google_maps_scrape(query, city, state, target, log_path, status_cb, cancel_
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
 
         def _new_driver():
-            d = webdriver.Remote(command_executor=SELENIUM_HUB_URL, options=options)
+            conn = RemoteConnection(SELENIUM_HUB_URL, resolve_ip=False)
+            conn.set_timeout(30)
+            d = webdriver.Remote(command_executor=conn, options=options)
             return d, WebDriverWait(d, 8)
 
         driver, wait = _new_driver()

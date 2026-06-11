@@ -39,6 +39,14 @@ driver = None
 DRIVERS_COUNT = int(os.environ.get("SELENIUM_DRIVERS_COUNT", "6"))
 selenium_driver_lock = threading.Semaphore(DRIVERS_COUNT)
 
+# Domains where both HTTP and Selenium fetching permanently failed (DNS error, SSL mismatch, etc.).
+# Populated during the job and checked before each fetch to avoid re-attempting unreachable sites.
+_dead_domains: set = set()
+_dead_domains_lock = threading.Lock()
+
+# Timeout (seconds) for establishing a new Remote WebDriver session with the selenium-grid.
+_WEBDRIVER_CONNECT_TIMEOUT = 30
+
 # In-memory Google cookie cache — shared across all sessions in this process
 _google_cookies: list = []
 _cookie_lock = threading.Lock()
@@ -268,8 +276,11 @@ def selenium_chrome_driver():
             "profile.password_manager_enabled": False,
         })
 
+        from selenium.webdriver.remote.remote_connection import RemoteConnection
+        conn = RemoteConnection(SELENIUM_HUB_URL, resolve_ip=False)
+        conn.set_timeout(_WEBDRIVER_CONNECT_TIMEOUT)
         driver = webdriver.Remote(
-            command_executor=SELENIUM_HUB_URL,
+            command_executor=conn,
             options=chrome_options
         )
 
@@ -355,24 +366,20 @@ def selenium_chrome_driver():
 
 
 def get_rendered_soup(url):
-
-    # driver = get_chrome_driver()
     with selenium_chrome_driver() as driver:
         driver.get(url)
         if 'not a robot' in driver.page_source:
-            # wait for iframe
             log(f"{url}: Encountered anti-bot, waiting for captcha to load...", log_path)
             iframe = WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located((By.XPATH, "//iframe[contains(@src,'recaptcha')]"))
             )
             driver.switch_to.frame(iframe)
-            # click checkbox
             checkbox = WebDriverWait(driver, 10).until(
                 EC.element_to_be_clickable((By.ID, "recaptcha-anchor"))
             )
             checkbox.click()
             driver.switch_to.default_content()
-        time.sleep(10)
+        time.sleep(5)
         html = driver.page_source
         return BeautifulSoup(html, "html.parser")
 
@@ -387,6 +394,13 @@ def close_driver():
 
 
 def get_soup(url, params=None):
+    from urllib.parse import urlparse
+    domain = urlparse(url).netloc.replace("www.", "")
+
+    with _dead_domains_lock:
+        if domain in _dead_domains:
+            return None
+
     try:
         r = requests.get(url, headers=HEADERS, timeout=10, params=params)
         if r.status_code and r.text:
@@ -400,6 +414,10 @@ def get_soup(url, params=None):
             return get_rendered_soup(url)
         except Exception as e2:
             log(f"Error while fetching rendered soup for {url}: {e2}", log_path)
+            if domain:
+                with _dead_domains_lock:
+                    _dead_domains.add(domain)
+                log(f"Marked {domain} as permanently unreachable — will skip in future calls", log_path)
             return None
     return None
 

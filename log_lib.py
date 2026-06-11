@@ -12,6 +12,44 @@ if not storage_lib.is_cloud():
 log_lock = Lock()
 csv_file_lock = Lock()
 
+# Cloud log buffering: batch writes instead of one S3 round-trip per line.
+# Reduces I/O by _FLUSH_SIZE× and eliminates most log_lock contention.
+_FLUSH_SIZE = 25
+_buffers: dict = {}          # {log_path: [line, ...]}
+_buffers_lock = Lock()
+_write_locks: dict = {}      # {log_path: Lock}  — one write lock per log file
+_write_locks_meta = Lock()
+
+
+def _get_write_lock(log_path: str) -> Lock:
+    with _write_locks_meta:
+        if log_path not in _write_locks:
+            _write_locks[log_path] = Lock()
+        return _write_locks[log_path]
+
+
+def _flush(log_path: str, lines: list):
+    """Write a batch of lines to cloud storage. Called outside _buffers_lock."""
+    with _get_write_lock(log_path):
+        try:
+            try:
+                existing = storage_lib.read_file(log_path).decode("utf-8")
+            except FileNotFoundError:
+                existing = ""
+            storage_lib.write_file(log_path, existing + "\n".join(lines) + "\n")
+        except Exception as e:
+            print(f"[{storage_lib.get_backend().upper()}] Log flush error for {log_path}: {e}")
+
+
+def flush_log(log_path: str):
+    """Force-flush any buffered lines — call this at job end."""
+    if not storage_lib.is_cloud() or not log_path:
+        return
+    with _buffers_lock:
+        lines = _buffers.pop(log_path, None)
+    if lines:
+        _flush(log_path, lines)
+
 
 def get_log_name():
     log_filename = datetime.now().strftime("log_%Y-%m-%d_%H-%M.log")
@@ -33,16 +71,15 @@ def log(message, log_path=None):
         return
 
     if storage_lib.is_cloud():
-        with log_lock:
-            try:
-                # Cloud storage has no native append — read, append, re-upload.
-                try:
-                    existing = storage_lib.read_file(log_path).decode("utf-8")
-                except FileNotFoundError:
-                    existing = ""
-                storage_lib.write_file(log_path, existing + log_message + "\n")
-            except Exception as e:
-                print(f"[{storage_lib.get_backend().upper()}] Logging Error for {log_path}: {e}")
+        to_flush = None
+        with _buffers_lock:
+            if log_path not in _buffers:
+                _buffers[log_path] = []
+            _buffers[log_path].append(log_message)
+            if len(_buffers[log_path]) >= _FLUSH_SIZE:
+                to_flush = _buffers.pop(log_path)
+        if to_flush:
+            _flush(log_path, to_flush)
     else:
         with log_lock:
             with open(log_path, "a", encoding="utf-8") as f:
