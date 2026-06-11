@@ -10,7 +10,7 @@ services:
       - "4442:4442"
       - "4443:4443"
     environment:
-      - SE_GRID_MAX_SESSION=4
+      - SE_GRID_MAX_SESSION=6
     mem_limit: 512m
 
   chrome-node:

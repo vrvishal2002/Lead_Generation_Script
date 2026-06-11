@@ -81,6 +81,6 @@ jobs:
               docker compose -f docker-compose.aws.yml down --remove-orphans || true
               docker stop $(docker ps -q) 2>/dev/null || true
               docker rm $(docker ps -aq) 2>/dev/null || true
-              ECR_IMAGE="$ECR_IMAGE" docker compose -f docker-compose.aws.yml up -d
+              ECR_IMAGE="$ECR_IMAGE" docker compose -f docker-compose.aws.yml up -d --scale chrome-node=6
               docker image prune -f
           ENDSSH
