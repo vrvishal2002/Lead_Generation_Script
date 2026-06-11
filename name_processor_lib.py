@@ -216,16 +216,19 @@ def names_match(name1, name2):
     f1, m1, l1 = split_name(n1)
     f2, m2, l2 = split_name(n2)
 
-    # First + Last must match
-    if f1 != f2 or l1 != l2:
-        return False
+    def _middles_ok(m_a, m_b):
+        if m_a and m_b:
+            return any(i in [x[0] for x in m_b] for i in [x[0] for x in m_a])
+        return True
 
-    # If both have middle names → check initial match
-    if m1 and m2:
-        m1_initials = [x[0] for x in m1]
-        m2_initials = [x[0] for x in m2]
+    # Standard order: First + Last match
+    if f1 == f2 and l1 == l2:
+        return _middles_ok(m1, m2)
 
-        return any(i in m2_initials for i in m1_initials)
+    # Reversed slug format: URL stores last-first-middle (e.g. /hozubin-rebecca-j/)
+    # so name2 first = name1 last and vice versa
+    if f1 and l1 and f2 and l2:
+        if f1 == l2 and l1 == f2:
+            return True
 
-    # If one has middle and other doesn't → still OK
-    return True
+    return False

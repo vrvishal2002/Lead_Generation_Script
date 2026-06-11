@@ -1,8 +1,8 @@
 from urllib.parse import urljoin, urlparse
-import name_processor_lib 
-import soup_content_lib 
+import name_processor_lib
+import soup_content_lib
 from log_lib import log
-from profile_processing_helper import ProfileProcessingHelper
+from profile_processing_helper import ProfileProcessingHelper, _is_scrapable_url
 from bs4 import BeautifulSoup
 
 
@@ -27,8 +27,13 @@ class DirectoryProcessingHelper:
         for link in soup.find_all("a", href=True):
             href = link["href"]
             full = urljoin(home_url, href)
+            # Skip non-HTML URLs (mailto:, tel:, images, PDFs, etc.)
+            if not _is_scrapable_url(full):
+                continue
+            if not urlparse(full).netloc:
+                continue
             if domain.replace("www.", '') not in urlparse(full).netloc \
-            and urlparse(full).netloc not in domain.replace("www.", '') or not urlparse(full).netloc:
+            and urlparse(full).netloc not in domain.replace("www.", ''):
                 continue
 
             lower = full.lower()

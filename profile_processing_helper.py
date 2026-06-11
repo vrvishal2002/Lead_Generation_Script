@@ -5,8 +5,7 @@ import name_processor_lib
 import soup_content_lib
 from log_lib import log
 
-# Patterns like "Law Office of X", "Law Offices of X", "Office of X", "Attorneys at Law" that
-# prefix an attorney name in headings on single-attorney firm pages.
+# Patterns like "Law Office of X", "Law Offices of X" that prefix an attorney name in headings.
 _FIRM_PREFIX_RE = re.compile(
     r'^(the\s+)?'
     r'(law\s+office[s]?\s+of|law\s+firm\s+of|offices\s+of|office\s+of|'
@@ -14,9 +13,44 @@ _FIRM_PREFIX_RE = re.compile(
     re.IGNORECASE
 )
 
+# Single intro words before a name: "Meet John Smith", "About Sara Bloom"
+_INTRO_WORD_RE = re.compile(
+    r'^(meet|about|welcome|introducing|our|the|attorney|lawyer)\s+',
+    re.IGNORECASE
+)
+
+# Trailing professional titles after a name: "John Smith, Attorney at Law"
+_TITLE_SUFFIX_RE = re.compile(
+    r',?\s*(attorney\s+at\s+law|trial\s+lawyer|attorney|lawyer|esq\.?|'
+    r'counsel|partner|associate|founder|owner|paralegal|j\.?d\.?|p\.?c\.?)$',
+    re.IGNORECASE
+)
+
+# Non-HTML file extensions to skip as directory/profile candidates
+_SKIP_EXTENSIONS = frozenset([
+    '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.ico',
+    '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+    '.zip', '.mp4', '.mp3', '.avi', '.mov',
+])
+
 
 def _strip_firm_prefix(text: str) -> str:
-    return _FIRM_PREFIX_RE.sub("", text).strip()
+    text = _FIRM_PREFIX_RE.sub("", text).strip()
+    text = _INTRO_WORD_RE.sub("", text).strip()
+    text = _TITLE_SUFFIX_RE.sub("", text).strip()
+    return text
+
+
+def _is_scrapable_url(url: str) -> bool:
+    """Return False for non-HTML URLs: mailto:, tel:, image files, etc."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return False
+    path_lower = parsed.path.lower().rstrip("/")
+    ext = "." + path_lower.rsplit(".", 1)[-1] if "." in path_lower.split("/")[-1] else ""
+    if ext in _SKIP_EXTENSIONS:
+        return False
+    return True
 
 
 class ProfileProcessingHelper:
@@ -51,6 +85,9 @@ class ProfileProcessingHelper:
 
         for link in main.find_all("a", href=True):
             full = urljoin(directory_url, link["href"])
+            # Skip non-HTML URLs (mailto:, tel:, images, PDFs, etc.)
+            if not _is_scrapable_url(full):
+                continue
             name = ""
             if full[-1] != '/':
                 name = " ".join(full.split('/')[-1].split('-'))
@@ -58,8 +95,12 @@ class ProfileProcessingHelper:
                 name =" ".join(full.split('/')[-2].split('-'))
             name = name_processor_lib.normalize_name(name, self.slug_exclusions)
 
-            if (urlparse(home_url).netloc in urlparse(full).netloc or \
-                urlparse(full).netloc in urlparse(home_url).netloc) and \
+            home_netloc = urlparse(home_url).netloc
+            full_netloc = urlparse(full).netloc
+            # Guard against empty netloc (e.g. from relative URLs that became mailto-like)
+            if not full_netloc:
+                continue
+            if (home_netloc in full_netloc or full_netloc in home_netloc) and \
                 name_processor_lib.looks_like_name(name) and name_processor_lib.is_profile_slug(full, blacklist=self.directory_keywords):
                 profile_links.append(full)
 
@@ -122,8 +163,8 @@ class ProfileProcessingHelper:
         return text
 
     def _extract_name_from_headings(self, main, page_text, name_in_link, url):
-        """Try h1 (all), h2, h3 in order to find the attorney name on a profile page."""
-        for tag_name in ["h1", "h2", "h3"]:
+        """Try h1 (all), h2, h3, h4 in order to find the attorney name on a profile page."""
+        for tag_name in ["h1", "h2", "h3", "h4"]:
             for heading in main.find_all(tag_name):
                 # Gather text from heading and its inline children
                 children_texts = [c.get_text(strip=True) for c in heading.find_all()]
@@ -269,13 +310,14 @@ class ProfileProcessingHelper:
                 "Profile URL": url
             })
 
-        # ── Heading-scan pass: pick up h2/h3 names with role in adjacent siblings ──
+        # ── Heading-scan pass: pick up h2/h3/h4 names with role in adjacent siblings ──
         # Handles patterns like:
         #   <h3>Carson Honeycutt</h3><strong>Founder, Attorney</strong>
+        #   <h4>Meet Eric Derleth</h4>  (intro word stripped)
         #   <h2>Josh B. Cooley</h2><h4>Cases of Note</h4>
         seen_heading_names = {p["Name"] for p in profiles}
         extended_role_kw = set(title_keywords)
-        for heading in soup.find_all(["h2", "h3"]):
+        for heading in soup.find_all(["h2", "h3", "h4"]):
             heading_text = heading.get_text(" ", strip=True)
             if len(heading_text) < 3 or len(heading_text) > 60:
                 continue
