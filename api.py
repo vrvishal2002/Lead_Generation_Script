@@ -2,6 +2,7 @@ import threading
 import uuid
 import time
 import os, json
+import signal
 import csv, io
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -68,6 +69,35 @@ def seed_configs():
 seed_configs()
 
 shutdown_event = threading.Event()
+
+def _emergency_save():
+    """Immediately save all in-progress leads to S3 — called on SIGTERM before the process exits."""
+    for jid, h in list(active_jobs.items()):
+        leads = h.status.get("recent_leads", [])
+        if not leads:
+            continue
+        folder = h.config.get("folder_name", "attorney_profiles")
+        try:
+            filename = f"emergency_{h.state}_{jid[:8]}_{int(time.time())}.csv"
+            buf = io.StringIO()
+            pd.DataFrame(leads).to_csv(buf, index=False)
+            storage_lib.write_file(f"{folder}/saved/{filename}", buf.getvalue())
+            log(f"Emergency save: {len(leads)} leads → {filename}", h.log_path)
+        except Exception as _e:
+            print(f"Emergency save failed for job {jid}: {_e}")
+        try:
+            flush_log(h.log_path)
+        except Exception:
+            pass
+
+_orig_sigterm = signal.getsignal(signal.SIGTERM)
+def _sigterm_handler(signum, frame):
+    shutdown_event.set()
+    _emergency_save()
+    if callable(_orig_sigterm):
+        _orig_sigterm(signum, frame)
+
+signal.signal(signal.SIGTERM, _sigterm_handler)
 
 class LeadConfig(BaseModel):
     id: str = Field(..., description="Unique ID for the lead type")
@@ -767,7 +797,7 @@ def run_job_logic(job_id: str, request: ScrapeRequest):
                 log(f"Checkpoint: saved {len(city_leads)} leads for {city} → {chk_path}", log_path)
             except Exception as chk_err:
                 log(f"Checkpoint save failed for {city}: {chk_err}", log_path)
-        helper.status["recent_leads"] = [l for l in helper.status["recent_leads"] if l.get("City") != city]
+        # recent_leads is NOT cleared — kept accumulating so emergency/final save always has everything
 
     except Exception as e:
         helper.status["phase"] = "Error"

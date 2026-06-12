@@ -10,7 +10,7 @@ services:
       - "4442:4442"
       - "4443:4443"
     environment:
-      - SE_GRID_MAX_SESSION=6
+      - SE_GRID_MAX_SESSION=4
     mem_limit: 512m
 
   chrome-node:
@@ -18,18 +18,19 @@ services:
     restart: unless-stopped
     depends_on:
       - selenium-hub
-    shm_size: "2gb"
+    shm_size: "512m"
     environment:
       - SE_EVENT_BUS_HOST=selenium-hub
       - SE_EVENT_BUS_PUBLISH_PORT=4442
       - SE_EVENT_BUS_SUBSCRIBE_PORT=4443
       - SE_NODE_MAX_SESSIONS=1
       - SE_NODE_SESSION_TIMEOUT=300
-    mem_limit: 1500m
+    mem_limit: 1200m
 
   lead-gen-api:
     image: ${ECR_IMAGE}
     restart: unless-stopped
+    stop_grace_period: 120s
     ports:
       - "80:7860"
     depends_on:
@@ -38,8 +39,8 @@ services:
       - S3_BUCKET_NAME=lead-gen-data-vishal
       - AWS_REGION=us-east-1
       - SELENIUM_HUB_URL=http://selenium-hub:4444
-      - SELENIUM_DRIVERS_COUNT=6
+      - SELENIUM_DRIVERS_COUNT=4
       - GOOGLE_API_KEY=AIzaSyBNhQK0iONS8JYDrHSPPpbNNpwegaSZgHY
       - GOOGLE_PLACES_KEY=${GOOGLE_PLACES_KEY:-}
       - YELP_API_KEY=${YELP_API_KEY:-}
-    mem_limit: 2500m
+    mem_limit: 2000m

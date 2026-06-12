@@ -122,6 +122,12 @@ class LeadGenerationHelper:
                     log(f"Domain {domain} was previously found to have no profiles with valid emails. Skipping firm {firm_name}.", log_path)
                     continue
 
+                import soup_content_lib as _scl
+                with _scl._dead_domains_lock:
+                    if domain in _scl._dead_domains:
+                        log(f"Domain {domain} is permanently dead — skipping {firm_name}.", log_path)
+                        continue
+
                 log(f"Checking fake email acceptance for firm {firm_name}...", log_path)
                 check_fake = fake_checker.verify_email(domain)
                 if not check_fake[0]:

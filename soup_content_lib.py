@@ -366,8 +366,22 @@ def selenium_chrome_driver():
 
 
 def get_rendered_soup(url):
+    from urllib.parse import urlparse
+    domain = urlparse(url).netloc.replace("www.", "")
+    with _dead_domains_lock:
+        if domain in _dead_domains:
+            return None
     with selenium_chrome_driver() as driver:
-        driver.get(url)
+        try:
+            driver.get(url)
+        except Exception as _nav_err:
+            _emsg = str(_nav_err)
+            if any(e in _emsg for e in ("ERR_NAME_NOT_RESOLVED", "ERR_ADDRESS_UNREACHABLE",
+                                         "ERR_CONNECTION_REFUSED", "ERR_CONNECTION_TIMED_OUT")):
+                with _dead_domains_lock:
+                    _dead_domains.add(domain)
+                log(f"Dead domain {domain} — marked permanently unreachable", log_path)
+            raise
         if 'not a robot' in driver.page_source:
             log(f"{url}: Encountered anti-bot, waiting for captcha to load...", log_path)
             iframe = WebDriverWait(driver, 10).until(
