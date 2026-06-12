@@ -9,13 +9,13 @@ from contextlib import asynccontextmanager
 from google import genai
 import pandas as pd
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Query, File, UploadFile
-from fastapi.responses import StreamingResponse
-from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
+import asyncio
 from pydantic import BaseModel, Field
 from typing import List, Dict, Optional
 from lead_generation_helper import LeadGenerationHelper
 from firm_parser import FirmParser
-from log_lib import log, flush_log, get_domain_names, get_lead_profile_names, csv_file_lock
+from log_lib import log, flush_log, get_domain_names, get_lead_profile_names, csv_file_lock, get_log_name
 import storage_lib
 
 # Configure Gemini AI
@@ -957,16 +957,28 @@ async def test_firm_gathering(
     target: int = 50
 ):
     """Test firm gathering only — runs scrape_firms and returns raw results without lead extraction."""
+    import traceback
+    import concurrent.futures
     from firm_parser import FirmParser
-    import threading
-    log_path = None
-    results = FirmParser(log_path=log_path).scrape_firms(query, target=target)
-    return {
-        "query": query,
-        "target": target,
-        "found": len(results),
-        "firms": results
-    }
+
+    lp = get_log_name()
+
+    def _run():
+        return FirmParser(log_path=lp).scrape_firms(query, target=target)
+
+    loop = asyncio.get_event_loop()
+    try:
+        results = await loop.run_in_executor(None, _run)
+        return {
+            "query": query,
+            "target": target,
+            "found": len(results),
+            "firms": results,
+            "log_path": lp,
+        }
+    except Exception as exc:
+        tb = traceback.format_exc()
+        return JSONResponse(status_code=500, content={"error": str(exc), "traceback": tb})
 
 
 if __name__ == "__main__":
