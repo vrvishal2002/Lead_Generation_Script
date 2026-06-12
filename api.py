@@ -951,6 +951,24 @@ async def get_active_jobs():
         } for job_id, helper in active_jobs.items()
     }
 
+@app.get("/test/firms")
+async def test_firm_gathering(
+    query: str = "medical malpractice and personal injury lawyers in New York City, New York",
+    target: int = 50
+):
+    """Test firm gathering only — runs scrape_firms and returns raw results without lead extraction."""
+    from firm_parser import FirmParser
+    import threading
+    log_path = None
+    results = FirmParser(log_path=log_path).scrape_firms(query, target=target)
+    return {
+        "query": query,
+        "target": target,
+        "found": len(results),
+        "firms": results
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
     # Bind to all interfaces when running in cloud, localhost-only otherwise

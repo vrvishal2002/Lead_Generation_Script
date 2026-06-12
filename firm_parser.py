@@ -1,8 +1,9 @@
 import os
 import re
 import time
+import random
 import requests
-from urllib.parse import urlparse, quote_plus
+from urllib.parse import urlparse, urljoin, quote_plus
 from log_lib import log
 
 GOOGLE_PLACES_KEY = os.environ.get("GOOGLE_PLACES_KEY", "")
@@ -372,7 +373,160 @@ def _google_maps_scrape(query, city, state, target, log_path, status_cb, cancel_
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FirmParser — tries all 3 options in order until target is met
+# Google Local tab scraping — &tbm=lcl with #pnnext pagination.
+# Uses Selenium Grid (Remote) when SELENIUM_HUB_URL is set (EC2/cloud),
+# falls back to local undetected-chromedriver for development.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _google_local_search(query, target, log_path, status_cb, cancel_event):
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+
+    log("Firm discovery: Google Local tab scraping (tbm=lcl)", log_path)
+    results, seen_names, visited_websites = [], set(), set()
+
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    ]
+
+    def _make_driver():
+        if SELENIUM_HUB_URL and SELENIUM_HUB_URL != "http://localhost:4444":
+            # Cloud / EC2 — use Selenium Grid
+            from selenium import webdriver
+            from selenium.webdriver.chrome.options import Options
+            from selenium.webdriver.remote.remote_connection import RemoteConnection
+            opts = Options()
+            opts.add_argument("--headless=new")
+            opts.add_argument("--no-sandbox")
+            opts.add_argument("--disable-dev-shm-usage")
+            opts.add_argument("--disable-blink-features=AutomationControlled")
+            opts.add_argument("--window-size=1280,900")
+            opts.add_argument("--disable-gpu")
+            opts.add_argument(f"--user-agent={random.choice(user_agents)}")
+            opts.add_experimental_option("excludeSwitches", ["enable-automation"])
+            conn = RemoteConnection(SELENIUM_HUB_URL, resolve_ip=False)
+            conn.set_timeout(30)
+            return webdriver.Remote(command_executor=conn, options=opts)
+        else:
+            # Local dev — use undetected-chromedriver (visible browser)
+            import undetected_chromedriver as uc
+            opts = uc.ChromeOptions()
+            opts.add_argument("--disable-blink-features=AutomationControlled")
+            opts.add_argument("--lang=en")
+            opts.add_argument(f"--user-agent={random.choice(user_agents)}")
+            return uc.Chrome(options=opts)
+
+    driver = None
+    try:
+        driver = _make_driver()
+        driver.execute_script(
+            "Object.defineProperty(navigator, 'webdriver', { get: () => undefined })"
+        )
+        time.sleep(3)
+
+        url = f"https://www.google.com/search?q={quote_plus(query)}&tbm=lcl"
+        log(f"Fetching: {url}", log_path)
+        driver.get(url)
+        time.sleep(random.uniform(2.0, 4.0))
+
+        if cancel_event and cancel_event.is_set():
+            return results
+
+        wait = WebDriverWait(driver, 20)
+        page = 1
+
+        while len(results) < target:
+            if cancel_event and cancel_event.is_set():
+                break
+
+            log(f"\nScraping page {page}...", log_path)
+
+            # Scroll to load all listings on this page
+            last_height = driver.execute_script("return document.body.scrollHeight")
+            while True:
+                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                time.sleep(3)
+                new_height = driver.execute_script("return document.body.scrollHeight")
+                if new_height == last_height:
+                    break
+                last_height = new_height
+
+            try:
+                wait.until(EC.presence_of_all_elements_located((By.CLASS_NAME, "VkpGBb")))
+            except Exception:
+                log("No listings found on page — stopping.", log_path)
+                break
+
+            listings = driver.find_elements(By.CLASS_NAME, "VkpGBb")
+            log(f"Found {len(listings)} listings on page {page}.", log_path)
+
+            for item in listings:
+                if cancel_event and cancel_event.is_set():
+                    break
+                try:
+                    name = item.text.split("\n")[0].strip()
+                    if not name or name in seen_names or "Sponsored" in name:
+                        continue
+                    seen_names.add(name)
+
+                    driver.execute_script("arguments[0].click();", item)
+                    time.sleep(2)
+
+                    website = None
+                    try:
+                        anchors = item.find_elements(By.TAG_NAME, "a")
+                        for a in anchors:
+                            if "website" in a.text.strip().lower():
+                                raw_href = a.get_attribute("href") or ""
+                                if raw_href.startswith("/"):
+                                    raw_href = urljoin("https://www.google.com", raw_href)
+                                parsed = urlparse(raw_href)
+                                if parsed.netloc:
+                                    website = f"{parsed.scheme or 'https'}://{parsed.netloc}"
+                                break
+                    except Exception:
+                        website = None
+
+                    if website and website not in visited_websites:
+                        visited_websites.add(website)
+                        results.append({"Firm Name": name, "Website": website})
+                        if status_cb:
+                            status_cb(len(results), target)
+                        log(f"  {len(results)}. {name} — {website}", log_path)
+                    else:
+                        log(f"  No website for {name}", log_path)
+
+                    if len(results) >= target:
+                        break
+
+                except Exception:
+                    continue
+
+            # Navigate to next page
+            try:
+                next_btn = driver.find_element(By.ID, "pnnext")
+                driver.execute_script("arguments[0].click();", next_btn)
+                time.sleep(random.uniform(3.0, 5.0))
+                page += 1
+            except Exception:
+                log("\nNo more pages available.", log_path)
+                break
+
+    finally:
+        if driver:
+            try:
+                driver.quit()
+            except Exception:
+                pass
+
+    log(f"Google Local search found {len(results)} firms", log_path)
+    return results
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FirmParser — tries all 4 options in order until target is met
 # ─────────────────────────────────────────────────────────────────────────────
 
 class FirmParser:
@@ -389,23 +543,27 @@ class FirmParser:
 
         results = []
 
-        # Option 1: Google Places API
+        # # Option 1: Google Places API
+        # if not (cancel_event and cancel_event.is_set()):
+        #     results = _google_places(query, city, state, target, self.log_path, status_callback, cancel_event)
+
+        # # Option 2: Yelp Fusion API (if Places didn't reach target)
+        # if len(results) < target and not (cancel_event and cancel_event.is_set()):
+        #     log(f"Places gave {len(results)}/{target} — trying Yelp", self.log_path)
+        #     yelp = _yelp_firms(city, state, target - len(results), self.log_path, status_callback, cancel_event)
+        #     seen = {r["Website"] for r in results}
+        #     results += [r for r in yelp if r["Website"] not in seen]
+
+        # # Option 3: Google Maps Selenium scraping
+        # if len(results) < target and not (cancel_event and cancel_event.is_set()):
+        #     log(f"Yelp gave {len(results)}/{target} — trying Google Maps scrape", self.log_path)
+        #     gm = _google_maps_scrape(query, city, state, target - len(results), self.log_path, status_callback, cancel_event)
+        #     seen = {r["Website"] for r in results}
+        #     results += [r for r in gm if r["Website"] not in seen]
+
+        # Google Local tab scraping (non-headless undetected Chrome)
         if not (cancel_event and cancel_event.is_set()):
-            results = _google_places(query, city, state, target, self.log_path, status_callback, cancel_event)
-
-        # Option 2: Yelp Fusion API (if Places didn't reach target)
-        if len(results) < target and not (cancel_event and cancel_event.is_set()):
-            log(f"Places gave {len(results)}/{target} — trying Yelp", self.log_path)
-            yelp = _yelp_firms(city, state, target - len(results), self.log_path, status_callback, cancel_event)
-            seen = {r["Website"] for r in results}
-            results += [r for r in yelp if r["Website"] not in seen]
-
-        # Option 3: Google Maps Selenium scraping (final fallback)
-        if len(results) < target and not (cancel_event and cancel_event.is_set()):
-            log(f"Yelp gave {len(results)}/{target} — trying Google Maps scrape", self.log_path)
-            gm = _google_maps_scrape(query, city, state, target - len(results), self.log_path, status_callback, cancel_event)
-            seen = {r["Website"] for r in results}
-            results += [r for r in gm if r["Website"] not in seen]
+            results = _google_local_search(query, target, self.log_path, status_callback, cancel_event)
 
         log(f"Firm discovery complete: {len(results)} firms total", self.log_path)
         return results[:target]
