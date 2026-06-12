@@ -276,11 +276,8 @@ def selenium_chrome_driver():
             "profile.password_manager_enabled": False,
         })
 
-        from selenium.webdriver.remote.remote_connection import RemoteConnection
-        conn = RemoteConnection(SELENIUM_HUB_URL, resolve_ip=False)
-        conn.set_timeout(_WEBDRIVER_CONNECT_TIMEOUT)
         driver = webdriver.Remote(
-            command_executor=conn,
+            command_executor=SELENIUM_HUB_URL,
             options=chrome_options
         )
 

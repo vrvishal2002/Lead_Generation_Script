@@ -206,7 +206,6 @@ def _google_maps_scrape(query, city, state, target, log_path, status_cb, cancel_
         from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
         from selenium.webdriver.chrome.options import Options
-        from selenium.webdriver.remote.remote_connection import RemoteConnection
 
         location = f"{city} {state}".strip()
         search_q = quote_plus(f"law firms lawyers {location}")
@@ -229,9 +228,7 @@ def _google_maps_scrape(query, city, state, target, log_path, status_cb, cancel_
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
 
         def _new_driver():
-            conn = RemoteConnection(SELENIUM_HUB_URL, resolve_ip=False)
-            conn.set_timeout(30)
-            d = webdriver.Remote(command_executor=conn, options=options)
+            d = webdriver.Remote(command_executor=SELENIUM_HUB_URL, options=options)
             return d, WebDriverWait(d, 8)
 
         driver, wait = _new_driver()
@@ -393,10 +390,9 @@ def _google_local_search(query, target, log_path, status_cb, cancel_event):
 
     def _make_driver():
         if SELENIUM_HUB_URL and SELENIUM_HUB_URL != "http://localhost:4444":
-            # Cloud / EC2 — use Selenium Grid
+            # Cloud / EC2 — use Selenium Grid (Selenium 4 API: pass URL string directly)
             from selenium import webdriver
             from selenium.webdriver.chrome.options import Options
-            from selenium.webdriver.remote.remote_connection import RemoteConnection
             opts = Options()
             opts.add_argument("--headless=new")
             opts.add_argument("--no-sandbox")
@@ -406,9 +402,7 @@ def _google_local_search(query, target, log_path, status_cb, cancel_event):
             opts.add_argument("--disable-gpu")
             opts.add_argument(f"--user-agent={random.choice(user_agents)}")
             opts.add_experimental_option("excludeSwitches", ["enable-automation"])
-            conn = RemoteConnection(SELENIUM_HUB_URL, resolve_ip=False)
-            conn.set_timeout(30)
-            return webdriver.Remote(command_executor=conn, options=opts)
+            return webdriver.Remote(command_executor=SELENIUM_HUB_URL, options=opts)
         else:
             # Local dev — use undetected-chromedriver (visible browser)
             import undetected_chromedriver as uc
