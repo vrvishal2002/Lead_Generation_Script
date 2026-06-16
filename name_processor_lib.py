@@ -199,6 +199,9 @@ def normalize_name(name, exclusions=None):
 def split_name(name):
     parts = name.split()
 
+    if len(parts) == 0:
+        return None, None, None
+
     if len(parts) == 1:
         return parts[0], None, None
 
@@ -222,7 +225,7 @@ def names_match(name1, name2):
         return True
 
     # Standard order: First + Last match
-    if f1 == f2 and l1 == l2:
+    if f1 and f2 and f1 == f2 and l1 == l2:
         return _middles_ok(m1, m2)
 
     # Reversed slug format: URL stores "last-first[-middle]" (e.g. /hozubin-rebecca-j/)
