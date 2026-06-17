@@ -201,34 +201,45 @@ def _google_maps_scrape(query, city, state, target, log_path, status_cb, cancel_
     results, seen = [], set()
 
     try:
-        from selenium import webdriver
         from selenium.webdriver.common.by import By
         from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
-        from selenium.webdriver.chrome.options import Options
 
         location = f"{city} {state}".strip()
         search_q = quote_plus(f"law firms lawyers {location}")
         maps_url = f"https://www.google.com/maps/search/{search_q}/"
 
-        options = Options()
-        options.add_argument("--headless=new")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--disable-blink-features=AutomationControlled")
-        options.add_argument("--window-size=1280,900")
-        options.add_argument("--disable-gpu")
-        options.add_argument("--disable-extensions")
-        options.add_argument("--blink-settings=imagesEnabled=false")
-        options.add_argument("--renderer-process-limit=2")
-        options.add_argument(
-            "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-        )
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        user_agents = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        ]
 
         def _new_driver():
-            d = webdriver.Remote(command_executor=SELENIUM_HUB_URL, options=options)
+            if SELENIUM_HUB_URL and SELENIUM_HUB_URL != "http://localhost:4444":
+                # Cloud / EC2 — headless Remote via Selenium Grid
+                from selenium import webdriver
+                from selenium.webdriver.chrome.options import Options
+                opts = Options()
+                opts.add_argument("--headless=new")
+                opts.add_argument("--no-sandbox")
+                opts.add_argument("--disable-dev-shm-usage")
+                opts.add_argument("--disable-blink-features=AutomationControlled")
+                opts.add_argument("--window-size=1280,900")
+                opts.add_argument("--disable-gpu")
+                opts.add_argument("--disable-extensions")
+                opts.add_argument("--blink-settings=imagesEnabled=false")
+                opts.add_argument("--renderer-process-limit=2")
+                opts.add_argument(f"--user-agent={random.choice(user_agents)}")
+                opts.add_experimental_option("excludeSwitches", ["enable-automation"])
+                d = webdriver.Remote(command_executor=SELENIUM_HUB_URL, options=opts)
+            else:
+                # Local dev — visible undetected-chromedriver so you can watch it
+                import undetected_chromedriver as uc
+                opts = uc.ChromeOptions()
+                opts.add_argument("--disable-blink-features=AutomationControlled")
+                opts.add_argument("--lang=en")
+                opts.add_argument(f"--user-agent={random.choice(user_agents)}")
+                d = uc.Chrome(options=opts)
             return d, WebDriverWait(d, 8)
 
         driver, wait = _new_driver()
