@@ -548,16 +548,13 @@ class FirmParser:
         #     seen = {r["Website"] for r in results}
         #     results += [r for r in yelp if r["Website"] not in seen]
 
-        # # Option 3: Google Maps Selenium scraping
-        # if len(results) < target and not (cancel_event and cancel_event.is_set()):
-        #     log(f"Yelp gave {len(results)}/{target} — trying Google Maps scrape", self.log_path)
-        #     gm = _google_maps_scrape(query, city, state, target - len(results), self.log_path, status_callback, cancel_event)
-        #     seen = {r["Website"] for r in results}
-        #     results += [r for r in gm if r["Website"] not in seen]
-
-        # Google Local tab scraping (non-headless undetected Chrome)
+        # Option 3: Google Maps Selenium scraping
         if not (cancel_event and cancel_event.is_set()):
-            results = _google_local_search(query, target, self.log_path, status_callback, cancel_event)
+            results = _google_maps_scrape(query, city, state, target, self.log_path, status_callback, cancel_event)
+
+        # # Google Local tab scraping (non-headless undetected Chrome)
+        # if not (cancel_event and cancel_event.is_set()):
+        #     results = _google_local_search(query, target, self.log_path, status_callback, cancel_event)
 
         log(f"Firm discovery complete: {len(results)} firms total", self.log_path)
         return results[:target]
