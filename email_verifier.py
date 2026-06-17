@@ -575,7 +575,7 @@ class EmailVerifier:
                             log(f"{email}: RESULT: Account does NOT exist (Attempt {attempt}).", self.log_path)
                             break
                         elif "password" in page_source or "challenge" in current_url or "saml" in current_url:
-                            log(f"{email}: ✅ Valid hit (Attempt {attempt}/4).", self.log_path)
+                            log(f"{email}: ✅ Valid hit (Attempt {attempt}/1).", self.log_path)
                             valid_count += 1
                             break
                         elif "captcha" in page_source or "verify it’s you" in page_source:
@@ -731,7 +731,7 @@ class EmailVerifier:
                     if "that email address doesn’t exist in our system" in page_source:
                         log(f"{email}: RESULT: Account does NOT exist (GoDaddy) (Attempt {attempt}).", self.log_path)
                     elif "how do you want to reset your password?" in page_source: 
-                        log(f"{email}: ✅ Valid hit (Attempt {attempt}/4).", self.log_path)
+                        log(f"{email}: ✅ Valid hit (Attempt {attempt}/1).", self.log_path)
                         valid_count += 1
                     elif "captcha" in page_source or "verify it's you" in page_source:
                         log(f"{email}: ⚠️ CAPTCHA triggered (Attempt {attempt}).", self.log_path)

@@ -220,7 +220,7 @@ def _google_maps_scrape(query, city, state, target, log_path, status_cb, cancel_
                 from selenium import webdriver
                 from selenium.webdriver.chrome.options import Options
                 opts = Options()
-                opts.add_argument("--headless=new")
+                opts.add_argument("--headless=0")
                 opts.add_argument("--no-sandbox")
                 opts.add_argument("--disable-dev-shm-usage")
                 opts.add_argument("--disable-blink-features=AutomationControlled")

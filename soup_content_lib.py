@@ -36,7 +36,7 @@ USER_AGENTS = [
 
 log_path = None
 driver = None
-DRIVERS_COUNT = int(os.environ.get("SELENIUM_DRIVERS_COUNT", "6"))
+DRIVERS_COUNT = int(os.environ.get("SELENIUM_DRIVERS_COUNT", "4"))
 selenium_driver_lock = threading.Semaphore(DRIVERS_COUNT)
 
 # Domains where both HTTP and Selenium fetching permanently failed (DNS error, SSL mismatch, etc.).
