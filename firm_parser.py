@@ -10,6 +10,61 @@ GOOGLE_PLACES_KEY = os.environ.get("GOOGLE_PLACES_KEY", "")
 YELP_API_KEY      = os.environ.get("YELP_API_KEY", "")
 SELENIUM_HUB_URL  = os.environ.get("SELENIUM_HUB_URL", "http://localhost:4444")
 
+# Major cities per US state — used to fan out state-level searches into per-city queries
+# so we break past Google Maps' ~20-result cap per single search.
+_STATE_CITIES = {
+    "alabama": ["Birmingham", "Montgomery", "Huntsville", "Mobile", "Tuscaloosa"],
+    "alaska": ["Anchorage", "Fairbanks", "Juneau", "Sitka", "Ketchikan"],
+    "arizona": ["Phoenix", "Tucson", "Mesa", "Chandler", "Scottsdale", "Glendale", "Tempe"],
+    "arkansas": ["Little Rock", "Fayetteville", "Fort Smith", "Springdale", "Jonesboro", "Conway", "Rogers", "Bentonville", "Pine Bluff", "Hot Springs"],
+    "california": ["Los Angeles", "San Diego", "San Jose", "San Francisco", "Fresno", "Sacramento", "Oakland", "Bakersfield", "Anaheim", "Santa Ana"],
+    "colorado": ["Denver", "Colorado Springs", "Aurora", "Fort Collins", "Lakewood", "Thornton", "Pueblo"],
+    "connecticut": ["Bridgeport", "New Haven", "Hartford", "Stamford", "Waterbury"],
+    "delaware": ["Wilmington", "Dover", "Newark", "Middletown"],
+    "florida": ["Jacksonville", "Miami", "Tampa", "Orlando", "St. Petersburg", "Hialeah", "Tallahassee", "Fort Lauderdale", "Port St. Lucie", "Pembroke Pines"],
+    "georgia": ["Atlanta", "Augusta", "Columbus", "Macon", "Savannah", "Athens", "Sandy Springs"],
+    "hawaii": ["Honolulu", "Pearl City", "Hilo", "Kailua", "Waipahu"],
+    "idaho": ["Boise", "Meridian", "Nampa", "Idaho Falls", "Pocatello"],
+    "illinois": ["Chicago", "Aurora", "Rockford", "Joliet", "Naperville", "Springfield", "Peoria"],
+    "indiana": ["Indianapolis", "Fort Wayne", "Evansville", "South Bend", "Carmel", "Bloomington"],
+    "iowa": ["Des Moines", "Cedar Rapids", "Davenport", "Sioux City", "Iowa City"],
+    "kansas": ["Wichita", "Overland Park", "Kansas City", "Topeka", "Olathe"],
+    "kentucky": ["Louisville", "Lexington", "Bowling Green", "Owensboro", "Covington"],
+    "louisiana": ["New Orleans", "Baton Rouge", "Shreveport", "Lafayette", "Lake Charles"],
+    "maine": ["Portland", "Lewiston", "Bangor", "South Portland", "Auburn"],
+    "maryland": ["Baltimore", "Frederick", "Rockville", "Gaithersburg", "Bowie", "Annapolis"],
+    "massachusetts": ["Boston", "Worcester", "Springfield", "Lowell", "Cambridge", "New Bedford"],
+    "michigan": ["Detroit", "Grand Rapids", "Warren", "Sterling Heights", "Ann Arbor", "Lansing", "Flint"],
+    "minnesota": ["Minneapolis", "St. Paul", "Rochester", "Duluth", "Bloomington", "Brooklyn Park"],
+    "mississippi": ["Jackson", "Gulfport", "Southaven", "Hattiesburg", "Biloxi"],
+    "missouri": ["Kansas City", "St. Louis", "Springfield", "Columbia", "Independence"],
+    "montana": ["Billings", "Missoula", "Great Falls", "Bozeman", "Butte"],
+    "nebraska": ["Omaha", "Lincoln", "Bellevue", "Grand Island", "Kearney"],
+    "nevada": ["Las Vegas", "Henderson", "Reno", "North Las Vegas", "Sparks"],
+    "new hampshire": ["Manchester", "Nashua", "Concord", "Derry", "Dover"],
+    "new jersey": ["Newark", "Jersey City", "Paterson", "Elizabeth", "Trenton", "Camden"],
+    "new mexico": ["Albuquerque", "Las Cruces", "Rio Rancho", "Santa Fe", "Roswell"],
+    "new york": ["New York City", "Buffalo", "Rochester", "Yonkers", "Syracuse", "Albany"],
+    "north carolina": ["Charlotte", "Raleigh", "Greensboro", "Durham", "Winston-Salem", "Fayetteville"],
+    "north dakota": ["Fargo", "Bismarck", "Grand Forks", "Minot", "West Fargo"],
+    "ohio": ["Columbus", "Cleveland", "Cincinnati", "Toledo", "Akron", "Dayton"],
+    "oklahoma": ["Oklahoma City", "Tulsa", "Norman", "Broken Arrow", "Lawton"],
+    "oregon": ["Portland", "Eugene", "Salem", "Gresham", "Hillsboro", "Bend"],
+    "pennsylvania": ["Philadelphia", "Pittsburgh", "Allentown", "Erie", "Reading", "Scranton"],
+    "rhode island": ["Providence", "Cranston", "Warwick", "Pawtucket", "East Providence"],
+    "south carolina": ["Columbia", "Charleston", "North Charleston", "Mount Pleasant", "Rock Hill", "Greenville"],
+    "south dakota": ["Sioux Falls", "Rapid City", "Aberdeen", "Brookings", "Watertown"],
+    "tennessee": ["Memphis", "Nashville", "Knoxville", "Chattanooga", "Clarksville"],
+    "texas": ["Houston", "San Antonio", "Dallas", "Austin", "Fort Worth", "El Paso", "Arlington", "Corpus Christi", "Plano", "Lubbock"],
+    "utah": ["Salt Lake City", "West Valley City", "Provo", "West Jordan", "Orem"],
+    "vermont": ["Burlington", "Essex", "South Burlington", "Colchester", "Rutland"],
+    "virginia": ["Virginia Beach", "Norfolk", "Chesapeake", "Richmond", "Newport News", "Alexandria"],
+    "washington": ["Seattle", "Spokane", "Tacoma", "Vancouver", "Bellevue", "Kent"],
+    "west virginia": ["Charleston", "Huntington", "Morgantown", "Parkersburg", "Wheeling"],
+    "wisconsin": ["Milwaukee", "Madison", "Green Bay", "Kenosha", "Racine", "Appleton"],
+    "wyoming": ["Cheyenne", "Casper", "Laramie", "Gillette", "Rock Springs"],
+}
+
 
 def _parse_location(query):
     match = re.search(r'\bin\s+(.+)$', query, re.IGNORECASE)
@@ -546,7 +601,40 @@ class FirmParser:
         city, state = _parse_location(query)
         log(f"Firm discovery — city: '{city}', state: '{state}', target: {target}", self.log_path)
 
+        # Detect state-level query: if the "city" portion matches a known state name,
+        # fan out into per-city searches to break Google Maps' ~20-result-per-search cap.
+        state_key = city.lower()
+        cities_for_state = _STATE_CITIES.get(state_key, [])
+
         results = []
+        seen_websites = set()
+
+        if cities_for_state:
+            log(f"State-level query detected for '{city}' — searching {len(cities_for_state)} cities", self.log_path)
+            # Extract the niche/practice part before "in <location>"
+            niche_match = re.search(r'^(.+?)\s+in\s+', query, re.IGNORECASE)
+            niche = niche_match.group(1).strip() if niche_match else query.strip()
+            per_city_target = max(20, target // len(cities_for_state) + 10)
+
+            for city_name in cities_for_state:
+                if cancel_event and cancel_event.is_set():
+                    break
+                if len(results) >= target:
+                    break
+                city_query = f"{niche} in {city_name}, {city}"
+                log(f"  Searching city: {city_name}", self.log_path)
+                city_results = _google_maps_scrape(
+                    city_query, city_name, city,
+                    per_city_target, self.log_path, status_callback, cancel_event
+                )
+                for r in city_results:
+                    if r["Website"] not in seen_websites:
+                        seen_websites.add(r["Website"])
+                        results.append(r)
+                log(f"  {city_name}: {len(city_results)} found, total so far: {len(results)}", self.log_path)
+        else:
+            # City-level or unrecognised query — single search
+            results = _google_maps_scrape(query, city, state, target, self.log_path, status_callback, cancel_event)
 
         # # Option 1: Google Places API
         # if not (cancel_event and cancel_event.is_set()):
@@ -558,10 +646,6 @@ class FirmParser:
         #     yelp = _yelp_firms(city, state, target - len(results), self.log_path, status_callback, cancel_event)
         #     seen = {r["Website"] for r in results}
         #     results += [r for r in yelp if r["Website"] not in seen]
-
-        # Option 3: Google Maps Selenium scraping
-        if not (cancel_event and cancel_event.is_set()):
-            results = _google_maps_scrape(query, city, state, target, self.log_path, status_callback, cancel_event)
 
         # # Google Local tab scraping (non-headless undetected Chrome)
         # if not (cancel_event and cancel_event.is_set()):
