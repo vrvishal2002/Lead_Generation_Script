@@ -270,7 +270,7 @@ def _google_maps_scrape(query, city, state, target, log_path, status_cb, cancel_
         ]
 
         def _new_driver():
-            if SELENIUM_HUB_URL and SELENIUM_HUB_URL != "http://localhost:4444":
+            if SELENIUM_HUB_URL:
                 # Cloud / EC2 — headless Remote via Selenium Grid
                 from selenium import webdriver
                 from selenium.webdriver.chrome.options import Options
@@ -455,7 +455,7 @@ def _google_local_search(query, target, log_path, status_cb, cancel_event):
     ]
 
     def _make_driver():
-        if SELENIUM_HUB_URL and SELENIUM_HUB_URL != "http://localhost:4444":
+        if SELENIUM_HUB_URL:
             # Cloud / EC2 — use Selenium Grid (Selenium 4 API: pass URL string directly)
             from selenium import webdriver
             from selenium.webdriver.chrome.options import Options

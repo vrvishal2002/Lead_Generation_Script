@@ -15,7 +15,7 @@ import threading
 
 from log_lib import log
 
-SELENIUM_HUB_URL = os.environ.get("SELENIUM_HUB_URL", "http://52.139.236.109:4444")
+SELENIUM_HUB_URL = os.environ.get("SELENIUM_HUB_URL", "http://localhost:4444")
 
 # =====================================================
 # BASIC FETCH
