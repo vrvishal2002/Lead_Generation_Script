@@ -301,7 +301,15 @@ def _google_maps_scrape(query, city, state, target, log_path, status_cb, cancel_
 
         try:
             driver.get(maps_url)
-            time.sleep(3)
+            time.sleep(5)
+
+            log(f"Current URL: {driver.current_url}", log_path)
+            log(f"Title: {driver.title}", log_path)
+
+            driver.save_screenshot("/tmp/maps.png")
+
+            with open("/tmp/maps.html", "w", encoding="utf-8") as f:
+                f.write(driver.page_source)
 
             # Dismiss cookie consent if present
             for btn_text in ["Accept all", "Reject all", "Accept"]:
