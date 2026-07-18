@@ -262,7 +262,7 @@ def _google_maps_scrape(query, city, state, target, log_path, status_cb, cancel_
 
         location = f"{city} {state}".strip()
         search_q = quote_plus(f"law firms lawyers {location}")
-        maps_url = f"https://www.google.com/maps/search/{search_q}/"
+        maps_url = f"https://www.google.com/maps/search/{search_q}/?hl=en&gl=us"
 
         user_agents = [
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -284,6 +284,8 @@ def _google_maps_scrape(query, city, state, target, log_path, status_cb, cancel_
                 opts.add_argument("--disable-extensions")
                 opts.add_argument("--blink-settings=imagesEnabled=false")
                 opts.add_argument("--renderer-process-limit=2")
+                opts.add_argument("--lang=en-US")
+                opts.add_argument("--accept-lang=en-US,en")
                 opts.add_argument(f"--user-agent={random.choice(user_agents)}")
                 opts.add_experimental_option("excludeSwitches", ["enable-automation"])
                 d = webdriver.Remote(command_executor=SELENIUM_HUB_URL, options=opts)
@@ -293,6 +295,8 @@ def _google_maps_scrape(query, city, state, target, log_path, status_cb, cancel_
                 opts = uc.ChromeOptions()
                 opts.add_argument("--disable-blink-features=AutomationControlled")
                 opts.add_argument("--lang=en")
+                opts.add_argument("--lang=en-US")
+                opts.add_argument("--accept-lang=en-US,en")
                 opts.add_argument(f"--user-agent={random.choice(user_agents)}")
                 d = uc.Chrome(options=opts)
             return d, WebDriverWait(d, 8)
